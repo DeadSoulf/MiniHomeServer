@@ -609,14 +609,23 @@ def network_snapshot(automatic=False):
     with SCAN_LOCK:
         scanning = dict(NETWORK_SCAN)
         z_status = dict(ZIGBEE_SCAN)
+    gateway = public_gateway_settings()
     if automatic and not scanning["running"]:
         try:
             if not last or time.time() - datetime.fromisoformat(last).timestamp() > 600:
                 launch_network_scan()
         except ValueError:
             launch_network_scan()
+    if automatic and gateway["configured"] and not z_status["running"]:
+        try:
+            if not z_status["finished_at"] or (
+                time.time() - datetime.fromisoformat(z_status["finished_at"]).timestamp() > 600
+            ):
+                launch_zigbee_scan()
+        except ValueError:
+            launch_zigbee_scan()
     return {"lan": devices, "zigbee": zigbee, "scan": scanning,
-            "zigbee_status": z_status, "last_scan": last, "gateway": public_gateway_settings()}
+            "zigbee_status": z_status, "last_scan": last, "gateway": gateway}
 
 
 def _safe_gateway_ip(value):
