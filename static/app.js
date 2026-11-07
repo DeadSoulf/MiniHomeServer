@@ -18,6 +18,10 @@ const actions = {
   "device.added": "Добавлен объект",
   "device.updated": "Изменён объект",
   "device.deleted": "Удалён объект",
+  "update.queued": "Запрошено обновление",
+  "update.success": "Установлено обновление",
+  "update.failed": "Ошибка обновления",
+  "update.rollback": "Откат обновления",
 };
 let csrf = null;
 let state = { devices: [], events: [], map_url: null, integrations: [], version: "—" };
@@ -28,6 +32,12 @@ let currentView = "territory";
 let lastMapUrl = null;
 let toastTimer = null;
 let busy = false;
+let updateInfo = null;
+let updateLatest = null;
+let updateAvailable = false;
+let updateChecking = false;
+let updateInstalling = false;
+let updateRequestedHere = false;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -104,6 +114,7 @@ function navigate(view) {
   const titles = { territory: "Территория", devices: "Оборудование", events: "События", settings: "Настройки" };
   $("breadcrumb-current").textContent = titles[view] || view;
   if (view !== "territory") setPlacing(false);
+  if (view === "settings" && csrf) loadUpdateStatus();
 }
 
 function render() {
@@ -382,6 +393,109 @@ async function uploadMap(file) {
   }
 }
 
+
+function shortCommit(sha) {
+  return typeof sha === "string" && /^[a-f0-9]{40}$/.test(sha)
+    ? sha.substring(0, 12) : "Неизвестна";
+}
+const phaseLabels = {
+  idle: "Готово к проверке",
+  queued: "В очереди",
+  running: "Устанавливается",
+  success: "Установлено",
+  failed: "Ошибка обновления",
+  rolled_back: "Выполнен откат",
+};
+function showUpdateStatus() {
+  if (!updateInfo) return;
+  const badge = $("update-badge");
+  const stage = updateInfo.state || "idle";
+  badge.textContent = updateInfo.enabled ? (phaseLabels[stage] || "Готово") : "Не настроено";
+  badge.className = "update-badge" + (stage === "failed" || stage === "rolled_back" ? " update-alert"
+    : stage === "success" ? " update-ok" : "");
+  $("update-current").textContent = shortCommit(updateInfo.current_sha);
+  $("update-latest").textContent = updateLatest ? shortCommit(updateLatest) : "Не проверялась";
+  if (!updateInfo.enabled) {
+    $("update-message").textContent = "Обновления ещё не активированы на Debian. Один раз выполните scripts/enable-web-updates.sh (инструкция в GitHub).";
+  } else {
+    $("update-message").textContent = updateInfo.message || "Готово к проверке GitHub.";
+  }
+  const active = stage === "queued" || stage === "running";
+  $("update-check").disabled = active || updateChecking || updateInstalling;
+  $("update-check").textContent = updateChecking ? "Проверяем GitHub…" : "Проверить GitHub";
+  $("update-install").disabled = !updateInfo.enabled || !updateAvailable || !updateLatest || active || updateInstalling || updateChecking;
+  $("update-install").textContent = active || updateInstalling ? "Идёт обновление…" : "Установить обновление";
+}
+async function loadUpdateStatus() {
+  if (!csrf || !$("update-current")) return;
+  try {
+    const next = await api("/api/update/status");
+    const wasRunning = updateInfo && ["queued", "running"].includes(updateInfo.state);
+    updateInfo = next;
+    if (updateLatest && next.current_sha === updateLatest) updateAvailable = false;
+    showUpdateStatus();
+    if (updateRequestedHere && wasRunning && next.state === "success") {
+      updateRequestedHere = false;
+      notify("Обновление завершено. Загружаем новую версию панели.");
+      setTimeout(() => window.location.reload(), 1100);
+    }
+    if (updateRequestedHere && (next.state === "failed" || next.state === "rolled_back")) {
+      updateRequestedHere = false;
+      notify(next.message || "Обновление не завершилось", true);
+    }
+  } catch (error) {
+    if (updateInfo && ["queued", "running"].includes(updateInfo.state)) {
+      $("update-message").textContent = "Панель перезапускается — ждём восстановления соединения…";
+    } else if (csrf) {
+      $("update-message").textContent = error.message;
+    }
+  }
+}
+async function checkForUpdate() {
+  if (updateChecking || !csrf) return;
+  updateChecking = true;
+  showUpdateStatus();
+  try {
+    const data = await api("/api/update/check");
+    updateLatest = data.latest_sha;
+    updateAvailable = !!data.update_available;
+    if (updateInfo) {
+      updateInfo.message = updateAvailable
+        ? "Найдена новая версия GitHub. Можно установить вручную."
+        : "На сервере установлена актуальная версия GitHub.";
+    }
+    showUpdateStatus();
+  } catch (error) {
+    notify(error.message, true);
+    $("update-message").textContent = error.message;
+  } finally {
+    updateChecking = false;
+    showUpdateStatus();
+  }
+}
+async function installUpdate() {
+  if (!updateInfo || !updateInfo.enabled || !updateAvailable || !updateLatest || updateInstalling) return;
+  const nextVersion = shortCommit(updateLatest);
+  if (!confirm("Установить обновление " + nextVersion + " из GitHub?\n\nMiniHomeServer ненадолго перезапустится. Карта и настройки сохранятся. При ошибке будет предпринята попытка отката.")) return;
+  updateInstalling = true;
+  showUpdateStatus();
+  try {
+    await api("/api/update/install", "POST", { sha: updateLatest });
+    updateRequestedHere = true;
+    updateInfo.state = "queued";
+    updateInfo.message = "Запрос отправлен системной службе обновлений.";
+    showUpdateStatus();
+    notify("Обновление запущено");
+    setTimeout(loadUpdateStatus, 900);
+  } catch (error) {
+    notify(error.message, true);
+    await loadUpdateStatus();
+  } finally {
+    updateInstalling = false;
+    showUpdateStatus();
+  }
+}
+
 function installHandlers() {
   $("login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -396,6 +510,8 @@ function installHandlers() {
       await refresh();
     } catch (err) { error.textContent = err.message; }
   });
+  $("update-check").addEventListener("click", checkForUpdate);
+  $("update-install").addEventListener("click", installUpdate);
   $("logout-btn").addEventListener("click", async () => {
     try { await api("/api/logout", "POST", {}); }
     catch { /* clear local session anyway */ }
@@ -458,6 +574,9 @@ function installHandlers() {
   };
   updateClock();
   setInterval(updateClock, 15000);
+  setInterval(() => {
+    if (csrf && currentView === "settings") loadUpdateStatus();
+  }, 3000);
   setInterval(() => {
     if (csrf && !dragging && !$("object-dialog").open && !busy) refresh();
   }, 20000);
