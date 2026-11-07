@@ -1,4 +1,4 @@
-/* MiniHomeServer dashboard v0.3.1 — more reliable manual updates. */
+/* MiniHomeServer dashboard v0.3.3 — reliable updates and SQLite migration. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
