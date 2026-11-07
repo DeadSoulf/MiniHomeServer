@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hmac
+import hashlib
 import json
 import os
 import re
@@ -24,6 +25,8 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 BASE = Path(__file__).resolve().parent
 DATA = Path(os.getenv("MINIHOME_DATA_DIR", str(BASE / "data"))).resolve()
@@ -38,10 +41,15 @@ SECURE_COOKIE = os.getenv("MINIHOME_COOKIE_SECURE", "0") == "1"
 MAX_BODY = 13 * 1024 * 1024
 SESSION_TTL = 12 * 3600
 KINDS = {"house", "boiler", "camera", "light", "gate", "sensor", "switch", "other"}
-SESSIONS: dict[str, dict] = {}
 FAILURES: dict[str, list[float]] = {}
 LOCK = threading.RLock()
-VERSION = "0.1.0"
+VERSION = "0.2.0"
+GITHUB_API = "https://api.github.com/repos/DeadSoulf/MiniHomeServer/commits/main"
+REVISION_FILE = BASE / ".release-commit"
+UPDATE_STATUS = DATA / "update-status.json"
+UPDATE_REQUEST = DATA / "update-request.json"
+UPDATE_UNIT = Path("/etc/systemd/system/minihome-update.path")
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def timestamp() -> str:
@@ -83,8 +91,75 @@ def init_db():
             action TEXT NOT NULL,
             detail TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS sessions (
+            token_hash TEXT PRIMARY KEY,
+            csrf TEXT NOT NULL,
+            expires REAL NOT NULL
+        );
         """)
         db.execute("PRAGMA journal_mode=WAL")
+
+
+def installed_sha():
+    try:
+        value = REVISION_FILE.read_text(encoding="ascii").strip()
+        return value if SHA_RE.fullmatch(value) else None
+    except OSError:
+        return None
+
+
+def update_status():
+    try:
+        if UPDATE_STATUS.stat().st_size > 8192:
+            raise ValueError("Status file too large")
+        data = json.loads(UPDATE_STATUS.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("Invalid status")
+    except (OSError, ValueError):
+        data = {"state": "idle", "message": "Проверка обновлений ещё не запускалась"}
+    return {
+        "enabled": UPDATE_UNIT.is_file(),
+        "state": data.get("state", "idle"),
+        "step": data.get("step", ""),
+        "message": data.get("message", ""),
+        "target_sha": data.get("target_sha", ""),
+        "current_sha": installed_sha(),
+        "updated_at": data.get("updated_at", ""),
+        "source": "DeadSoulf/MiniHomeServer",
+        "branch": "main",
+    }
+
+
+def github_latest_sha():
+    request = Request(GITHUB_API, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "MiniHomeServer/0.2",
+    })
+    try:
+        with urlopen(request, timeout=8) as response:
+            data = json.loads(response.read(32768))
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+        raise ValueError("Не удалось проверить GitHub. Повторите попытку позже") from exc
+    sha = data.get("sha") if isinstance(data, dict) else None
+    if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        raise ValueError("GitHub вернул некорректную версию")
+    return sha
+
+
+def atomic_json(path, payload):
+    tmp = DATA / (".update-tmp-" + secrets.token_hex(8))
+    try:
+        with tmp.open("x", encoding="utf-8") as out:
+            json.dump(payload, out, ensure_ascii=False, separators=(",", ":"))
+            out.write("\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def session_hash(sid):
+    return hashlib.sha256(sid.encode("utf-8")).hexdigest()
 
 
 def add_event(db, action: str, detail: str):
@@ -226,16 +301,19 @@ class Handler(BaseHTTPRequestHandler):
         try:
             cookie.load(self.headers.get("Cookie", ""))
             sid = cookie["mh_session"].value
-        except (KeyError, Exception):
+        except Exception:
             return None
-        with LOCK:
-            session = SESSIONS.get(sid)
-            if not session:
+        with database() as db:
+            row = db.execute(
+                "SELECT csrf,expires FROM sessions WHERE token_hash=?",
+                (session_hash(sid),)
+            ).fetchone()
+            if row is None:
                 return None
-            if session["expires"] < time.time():
-                del SESSIONS[sid]
+            if row["expires"] < time.time():
+                db.execute("DELETE FROM sessions WHERE token_hash=?", (session_hash(sid),))
                 return None
-            return session
+            return dict(row)
 
     def require(self, write=False):
         session = self.session()
@@ -273,6 +351,23 @@ class Handler(BaseHTTPRequestHandler):
             if self.require():
                 return self.send_bytes(200, snapshot())
             return
+        if path == "/api/update/status":
+            if not self.require():
+                return
+            return self.send_bytes(200, update_status())
+        if path == "/api/update/check":
+            if not self.require():
+                return
+            try:
+                latest = github_latest_sha()
+            except ValueError as exc:
+                return self.error(502, str(exc))
+            current = installed_sha()
+            return self.send_bytes(200, {
+                "current_sha": current, "latest_sha": latest,
+                "update_available": latest != current,
+                "source": "DeadSoulf/MiniHomeServer", "branch": "main",
+            })
         if path == "/media/territory":
             if not self.require():
                 return
@@ -332,7 +427,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.error(401, "Неверный пароль")
                 FAILURES.pop(ip, None)
                 sid, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-                SESSIONS[sid] = {"csrf": csrf, "expires": now + SESSION_TTL}
+            with database() as db:
+                db.execute("DELETE FROM sessions WHERE expires < ?", (now,))
+                db.execute(
+                    "INSERT INTO sessions(token_hash,csrf,expires) VALUES(?,?,?)",
+                    (session_hash(sid), csrf, now + SESSION_TTL),
+                )
             cookie = (f"mh_session={sid}; Path=/; Max-Age={SESSION_TTL}; "
                       f"HttpOnly; SameSite=Strict" + ("; Secure" if SECURE_COOKIE else ""))
             with database() as db:
@@ -346,13 +446,45 @@ class Handler(BaseHTTPRequestHandler):
             cookie = SimpleCookie()
             cookie.load(self.headers.get("Cookie", ""))
             sid = cookie.get("mh_session")
-            with LOCK:
-                if sid:
-                    SESSIONS.pop(sid.value, None)
+            if sid:
+                with database() as db:
+                    db.execute("DELETE FROM sessions WHERE token_hash=?", (session_hash(sid.value),))
             expired = "mh_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"
             if SECURE_COOKIE:
                 expired += "; Secure"
             return self.send_bytes(200, {"ok": True}, cookie=expired)
+
+        if method == "POST" and path == "/api/update/install":
+            if not UPDATE_UNIT.is_file():
+                return self.error(409, "Сначала подключите службу обновлений на Debian")
+            data = self.body()
+            requested = data.get("sha")
+            if not isinstance(requested, str) or not SHA_RE.fullmatch(requested):
+                return self.error(400, "Неверный идентификатор версии")
+            with LOCK:
+                status = update_status()
+                if status["state"] in ("queued", "running") or UPDATE_REQUEST.exists():
+                    return self.error(409, "Обновление уже выполняется")
+                if requested == installed_sha():
+                    return self.error(409, "Эта версия уже установлена")
+                try:
+                    actual = github_latest_sha()
+                except ValueError as exc:
+                    return self.error(502, str(exc))
+                if actual != requested:
+                    return self.error(409, "На GitHub появилась другая версия. Проверьте ещё раз")
+                atomic_json(UPDATE_STATUS, {
+                    "state": "queued",
+                    "step": "queued",
+                    "message": "Запрос обновления принят; ожидаем системную службу",
+                    "current_sha": installed_sha(),
+                    "target_sha": requested,
+                    "updated_at": timestamp(),
+                })
+                atomic_json(UPDATE_REQUEST, {"sha": requested, "requested_at": timestamp()})
+                with database() as db:
+                    add_event(db, "update.queued", f"Заказано обновление {requested[:12]}")
+            return self.send_bytes(202, {"ok": True, "sha": requested})
 
         if method == "POST" and path == "/api/map":
             data = self.body()
