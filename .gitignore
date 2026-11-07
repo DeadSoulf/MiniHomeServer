@@ -1,0 +1,12 @@
+# Never commit credentials or runtime databases
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
