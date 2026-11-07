@@ -104,6 +104,17 @@ fi
 printf '%s\n' "$commit" > /opt/minihome/.release-commit
 chmod 0644 /opt/minihome/.release-commit
 
+python3 - <<'PY'
+import hashlib, json, os
+from pathlib import Path
+root = Path("/opt/minihome")
+names = ("server.py", "static/index.html", "static/app.js", "static/style.css")
+digests = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names}
+path = root / ".release-manifest.json"
+path.write_text(json.dumps(digests, sort_keys=True) + "\n", encoding="utf-8")
+os.chmod(path, 0o644)
+PY
+
 install -m 0644 "$repo_root/scripts/systemd/minihome-update.service" \
   /etc/systemd/system/minihome-update.service
 install -m 0644 "$repo_root/scripts/systemd/minihome-update.path" \
