@@ -95,12 +95,41 @@ class NetworkInventoryTests(unittest.TestCase):
         ]
         count = server._store_zigbee_devices(items, {"Датчик кухни": "online"}, "192.168.50.20")
         self.assertEqual(count, 2)
-        rows = server.network_snapshot()["zigbee"]
+        with patch.dict(server.ZIGBEE_SCAN, {"connected": True}):
+            rows = server.network_snapshot()["zigbee"]
         sensor = next(item for item in rows if item["name"] == "Датчик кухни")
         coordinator = next(item for item in rows if item["type"] == "Coordinator")
         self.assertEqual(sensor["availability"], "online")
         self.assertEqual(coordinator["availability"], "unknown")
         self.assertEqual(sensor["bridge_ip"], "192.168.50.20")
+
+    def test_zigbee_restart_does_not_present_saved_status_as_live(self):
+        server._store_zigbee_devices([
+            {"ieee_address": "0x00158d00018255df", "friendly_name": "Saved sensor"}
+        ], {"Saved sensor": "online"}, "192.168.50.20")
+        with patch.dict(server.ZIGBEE_SCAN, {"connected": False}):
+            item = server.network_snapshot()["zigbee"][0]
+        self.assertEqual(item["availability"], "unknown")
+        self.assertEqual(item["name"], "Saved sensor")
+        self.assertTrue(item["last_seen"])
+
+    def test_zigbee_failed_poll_hides_stale_status_until_recovery(self):
+        items = [{"ieee_address": "0x00158d00018255df", "friendly_name": "Saved sensor"}]
+        server._store_zigbee_devices(items, {"Saved sensor": "online"}, "192.168.50.20")
+        with (patch.dict(server.ZIGBEE_SCAN, {"connected": True}),
+              patch.object(server, "gateway_settings", return_value={"host": "192.168.50.20"}),
+              patch.object(server, "_safe_gateway_ip"),
+              patch.object(server, "_mqtt_inventory", side_effect=OSError("Test gateway unavailable"))):
+            server._zigbee_scan_worker()
+            failed = server.network_snapshot()
+            self.assertFalse(failed["zigbee_status"]["connected"])
+            self.assertEqual(failed["zigbee"][0]["availability"], "unknown")
+            with patch.object(server, "_mqtt_inventory", return_value=(items, {"Saved sensor": "online"})):
+                server._zigbee_scan_worker()
+            recovered = server.network_snapshot()
+            self.assertTrue(recovered["zigbee_status"]["connected"])
+            self.assertEqual(recovered["zigbee"][0]["availability"], "online")
+            self.assertEqual(len(recovered["zigbee"]), 1)
 
     def test_zigbee2mqtt_retained_inventory(self):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

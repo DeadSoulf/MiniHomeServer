@@ -50,7 +50,7 @@ SESSION_TTL = 12 * 3600
 KINDS = {"house", "boiler", "camera", "light", "gate", "sensor", "switch", "other"}
 FAILURES: dict[str, list[float]] = {}
 LOCK = threading.RLock()
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 GITHUB_API = "https://api.github.com/repos/DeadSoulf/MiniHomeServer/commits/main"
 REVISION_FILE = BASE / ".release-commit"
 UPDATE_STATUS = DATA / "update-status.json"
@@ -630,6 +630,11 @@ def network_snapshot(automatic=False):
     with SCAN_LOCK:
         scanning = dict(NETWORK_SCAN)
         z_status = dict(ZIGBEE_SCAN)
+    # Stored availability is historical until this process confirms the gateway.
+    # Keep inventory and last_seen intact when a poll fails or the server restarts.
+    if not z_status["connected"]:
+        for item in zigbee:
+            item["availability"] = "unknown"
     gateway = public_gateway_settings()
     if automatic and not scanning["running"]:
         try:

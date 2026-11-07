@@ -258,7 +258,12 @@ def perform(requested):
             shutil.copy2(repo / WORKER_SOURCE, WORKER)
             os.chmod(WORKER, 0o755)
             write_status("success", "complete", "Обновление установлено успешно", requested, actual)
-            prune_backups()
+            # Retention is housekeeping, not part of the installation transaction.
+            # A full/read-only backup disk must not roll back a healthy release.
+            try:
+                prune_backups()
+            except OSError as exc:
+                print(f"Предупреждение: старые резервные копии сохранены: {exc}", flush=True)
     except Exception as exc:
         detail = str(exc)
         if modified:

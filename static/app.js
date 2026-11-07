@@ -392,6 +392,16 @@ async function uploadMap(file) {
       reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
       reader.readAsDataURL(file);
     });
+    // Do not replace a working map with an unreadable or truncated image.
+    await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => {
+        if (image.naturalWidth > 0 && image.naturalHeight > 0) resolve();
+        else reject(new Error("Изображение повреждено. Прежняя карта сохранена."));
+      };
+      image.onerror = () => reject(new Error("Изображение повреждено. Прежняя карта сохранена."));
+      image.src = data_url;
+    });
     await api("/api/map", "POST", { data_url });
     await refresh();
     notify("Карта загружена");
