@@ -127,6 +127,9 @@ except Exception as e:
     raise SystemExit('Не удалось проверить панель: ' + str(e))
 PY
 then
+  if [ -f "$repo_root/scripts/enable-web-updates.sh" ]; then
+    bash "$repo_root/scripts/enable-web-updates.sh"
+  fi
   echo "MiniHomeServer запущен на 0.0.0.0:8080 (на всех сетевых интерфейсах)"
   echo "В браузере: http://IP_СЕРВЕРА:8080 (если есть разрешение в firewall / проброс порта)"
   echo "ВАЖНО: подключение HTTP не шифруется; для выхода в интернет нужен HTTPS."
