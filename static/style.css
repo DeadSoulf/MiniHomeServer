@@ -311,3 +311,29 @@ input::placeholder { color:#60788e; }
 @media(prefers-reduced-motion:reduce) {
   *,*::before,*::after { transition-duration:0.01ms !important; animation-duration:0.01ms !important; }
 }
+
+
+/* GitHub updates: deliberately separate from physical device controls. */
+.updates-card { grid-column: 1 / -1; min-height: 0 !important; }
+.update-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; }
+.update-heading h2 { margin:0 0 10px; }
+.update-heading .settings-description { margin:0; }
+.update-badge {
+  white-space:nowrap; display:inline-flex; align-items:center;
+  background:rgba(112,141,164,.12); border:1px solid #345065;
+  border-radius:8px; padding:8px 11px; font-size:11px; color:#c5d4dd;
+}
+.update-badge.update-ok { border-color:#326a61; color:var(--accent); }
+.update-badge.update-alert { border-color:#884755; color:var(--danger); }
+.update-versions { display:grid; grid-template-columns:1fr 1fr; gap:15px; margin:20px 0 14px; }
+.update-versions > div { background:#0d1927; border:1px solid var(--border); border-radius:10px; padding:15px; }
+.update-versions span { display:block; color:var(--muted); font-size:11px; margin-bottom:9px; }
+.update-versions code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:13px; color:var(--text); }
+.update-message { color:#c1d3de; font-size:12px; line-height:1.65; margin:14px 0; min-height:20px; }
+.update-toolbar { display:flex; gap:10px; flex-wrap:wrap; }
+.update-note { color:#8199ac; margin-top:18px; max-width:720px; line-height:1.6; font-size:11px; }
+@media(max-width:520px) {
+  .update-heading { flex-direction:column; gap:10px; }
+  .update-versions { grid-template-columns:1fr; }
+  .update-toolbar .btn { flex:1 1 auto; }
+}
