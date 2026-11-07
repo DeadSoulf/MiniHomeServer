@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b111d">
+  <meta name="description" content="MiniHomeServer — локальная веб-панель дома и территории">
+  <title>MiniHomeServer — Территория</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="auth-screen" class="auth-screen">
+    <form id="login-form" class="auth-card" autocomplete="on">
+      <div class="auth-logo">M<span>·</span></div>
+      <div class="eyebrow">Локальный центр управления</div>
+      <h1>MiniHomeServer</h1>
+      <p>Войдите для доступа к карте территории и оборудованию.</p>
+      <label class="field-label" for="login-password">Пароль администратора</label>
+      <input id="login-password" type="password" name="password" autocomplete="current-password" minlength="12" required autofocus placeholder="Введите пароль">
+      <button class="btn primary full" type="submit">Войти в систему <span aria-hidden="true">→</span></button>
+      <div class="form-error" id="login-error" role="alert"></div>
+      <div class="auth-footer">Ваши данные остаются на вашем сервере.</div>
+    </form>
+  </div>
+
+  <div id="app-shell" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">M<span>·</span></div>
+        <div>
+          <strong>MiniHomeServer</strong>
+          <small>Панель управления</small>
+        </div>
+      </div>
+      <div class="nav-label">ПРОСТРАНСТВО</div>
+      <nav class="navigation" aria-label="Главное меню">
+        <button class="nav-item active" type="button" data-view="territory"><span class="nav-icon">▧</span> Территория</button>
+        <button class="nav-item" type="button" data-view="devices"><span class="nav-icon">◫</span> Оборудование <span id="nav-device-count" class="nav-count">0</span></button>
+        <button class="nav-item" type="button" data-view="events"><span class="nav-icon">◷</span> События</button>
+      </nav>
+      <div class="nav-label section-sep">СИСТЕМА</div>
+      <nav class="navigation" aria-label="Система">
+        <button class="nav-item" type="button" data-view="settings"><span class="nav-icon">⚙</span> Настройки</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="system-status"><span class="status-dot"></span><div><strong>Сервер доступен</strong><small>Локальная система</small></div></div>
+        <div class="sidebar-version" id="sidebar-version">MiniHomeServer</div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="breadcrumb">MiniHomeServer <span>/</span> <b id="breadcrumb-current">Территория</b></div>
+        <div class="top-actions">
+          <span class="local-label"><span class="status-dot"></span> Локальное подключение</span>
+          <div class="top-clock" id="clock"></div>
+          <button class="btn subtle small" id="logout-btn" type="button" title="Выйти">Выйти</button>
+        </div>
+      </header>
+
+      <main class="main-content">
+        <section class="view active" id="view-territory">
+          <div class="page-heading">
+            <div>
+              <div class="eyebrow accent">ПРОСТРАНСТВО / ОБЗОР</div>
+              <h1>Моя территория</h1>
+              <p class="page-subtitle">Интерактивный план участка и единая точка управления объектами.</p>
+            </div>
+            <button id="add-object-btn" class="btn primary" type="button"><span class="plus">＋</span> Добавить объект</button>
+          </div>
+
+          <div class="stats-grid">
+            <div class="stat-card"><div class="stat-top">Всего объектов <span class="stat-symbol">▦</span></div><strong id="stat-total">0</strong><small>На территории</small></div>
+            <div class="stat-card"><div class="stat-top">Зоны <span class="stat-symbol">⌂</span></div><strong id="stat-zones">0</strong><small>Сгруппировано</small></div>
+            <div class="stat-card"><div class="stat-top">Без телеметрии <span class="stat-symbol">◌</span></div><strong id="stat-unknown">0</strong><small>Ожидают интеграции</small></div>
+            <div class="stat-card"><div class="stat-top">Подключения <span class="stat-symbol">⇄</span></div><strong id="stat-integrations">0</strong><small>Активных интеграций</small></div>
+          </div>
+
+          <div class="map-card">
+            <div class="card-header">
+              <div><h2>Карта территории</h2><p>Нажмите на объект, чтобы открыть сведения. В режиме редактирования объекты можно перемещать.</p></div>
+              <div class="toolbar">
+                <label class="btn secondary" for="map-file"><span aria-hidden="true">↥</span> Загрузить план</label>
+                <input id="map-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+                <button id="edit-map-btn" class="btn secondary" type="button" aria-pressed="false">✎ Редактировать</button>
+              </div>
+            </div>
+            <div class="map-viewport">
+              <div id="map-stage" class="map-stage" aria-label="Интерактивная карта территории">
+                <img id="map-image" alt="План территории" hidden>
+                <div id="map-empty" class="map-empty">
+                  <div class="empty-icon">⌗</div>
+                  <strong>Здесь будет план вашей территории</strong>
+                  <p>Загрузите изображение участка, чтобы разместить дом, котельную, ворота, камеры и датчики.</p>
+                  <label class="btn primary" for="map-file">Загрузить карту</label>
+                </div>
+                <div id="map-markers" class="map-markers"></div>
+                <div class="map-grid" aria-hidden="true"></div>
+              </div>
+            </div>
+            <div class="map-footer">
+              <div class="map-legend"><span class="legend-dot gray"></span> Нет данных <span class="legend-sep"></span><span class="legend-dot cyan"></span> Выбранный объект</div>
+              <span id="map-mode-label" class="map-tip">Нажмите «Редактировать», чтобы перемещать объекты</span>
+            </div>
+          </div>
+
+          <div class="bottom-grid">
+            <article class="panel-card">
+              <div class="panel-title"><h2>Объекты территории</h2><button class="text-link" type="button" data-go="devices">Все объекты ↗</button></div>
+              <div id="summary-devices" class="summary-list"></div>
+            </article>
+            <article class="panel-card">
+              <div class="panel-title"><h2>Последние события</h2><button class="text-link" type="button" data-go="events">Журнал ↗</button></div>
+              <div id="summary-events" class="summary-list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-devices">
+          <div class="page-heading">
+            <div><div class="eyebrow accent">ПРОСТРАНСТВО / КАТАЛОГ</div><h1>Оборудование</h1><p class="page-subtitle">Реестр объектов, их привязка к карте и статус доступности.</p></div>
+            <button class="btn primary" type="button" id="devices-add-btn">＋ Добавить объект</button>
+          </div>
+          <article class="panel-card devices-panel">
+            <div class="table-heading"><h2>Все объекты</h2><span class="small-muted" id="device-list-total"></span></div>
+            <div id="devices-list" class="devices-list"></div>
+          </article>
+        </section>
+
+        <section class="view" id="view-events">
+          <div class="page-heading"><div><div class="eyebrow accent">СИСТЕМА / ИСТОРИЯ</div><h1>События</h1><p class="page-subtitle">Действия администратора и изменения конфигурации на сервере.</p></div></div>
+          <article class="panel-card"><div id="events-list" class="events-list"></div></article>
+        </section>
+
+        <section class="view" id="view-settings">
+          <div class="page-heading"><div><div class="eyebrow accent">СИСТЕМА / КОНФИГУРАЦИЯ</div><h1>Настройки</h1><p class="page-subtitle">Основные сведения и подготовка к подключению оборудования.</p></div></div>
+          <div class="settings-grid">
+            <article class="panel-card">
+              <h2>Сервер</h2>
+              <div class="info-line"><span>Название</span><strong>MiniHomeServer</strong></div>
+              <div class="info-line"><span>Версия</span><strong id="settings-version">—</strong></div>
+              <div class="info-line"><span>Режим</span><strong>Локальный</strong></div>
+              <div class="info-line"><span>Хранилище</span><strong>SQLite · сервер</strong></div>
+            </article>
+            <article class="panel-card">
+              <h2>Карта территории</h2>
+              <p class="settings-description">Поддерживаются PNG, JPEG и WebP размером до 8 МБ. При повторной загрузке координаты объектов сохраняются.</p>
+              <label class="btn secondary" for="map-file">↥ Заменить план</label>
+            </article>
+            <article class="panel-card">
+              <h2>Интеграции</h2>
+              <p class="settings-description">Подключение MQTT, Home Assistant, Frigate и контроллеров ESP32 будет добавляться по отдельности. До подключения реальные показания не выдумываются, а команды устройствам не отправляются.</p>
+              <div class="integration-coming">◌ Нет подключённых интеграций</div>
+            </article>
+            <article class="panel-card">
+              <h2>Безопасность</h2>
+              <p class="settings-description">Доступ защищён паролем и сессией. Управление физическими устройствами в этой версии отключено. Для доступа из интернета необходим HTTPS и безопасный шлюз.</p>
+              <div class="integration-coming">● Режим без управляющих команд</div>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="object-dialog" class="dialog">
+    <form id="object-form" method="dialog">
+      <div class="dialog-head"><div><div class="eyebrow accent">ТЕРРИТОРИЯ / ОБЪЕКТ</div><h2 id="dialog-title">Новый объект</h2></div><button class="icon-close" type="button" id="dialog-close" aria-label="Закрыть">×</button></div>
+      <div class="form-body">
+        <label class="field-label" for="object-name">Название</label>
+        <input id="object-name" maxlength="80" required placeholder="Например, котельная">
+        <label class="field-label" for="object-kind">Тип</label>
+        <select id="object-kind" required>
+          <option value="house">Дом / здание</option>
+          <option value="boiler">Котельная / отопление</option>
+          <option value="camera">Камера</option>
+          <option value="light">Освещение</option>
+          <option value="gate">Ворота / калитка</option>
+          <option value="sensor">Датчик</option>
+          <option value="switch">Реле / выключатель</option>
+          <option value="other">Другое</option>
+        </select>
+        <label class="field-label" for="object-zone">Зона / группа</label>
+        <input id="object-zone" maxlength="80" placeholder="Например, двор">
+        <div class="coord-note" id="object-coords">Расположение: центр карты (можно переместить в редакторе)</div>
+        <input type="hidden" id="object-x">
+        <input type="hidden" id="object-y">
+        <input type="hidden" id="object-id">
+        <div id="object-error" class="form-error" role="alert"></div>
+      </div>
+      <div class="dialog-actions"><button type="button" id="dialog-cancel" class="btn secondary">Отмена</button><button type="submit" class="btn primary" id="dialog-save">Сохранить</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
