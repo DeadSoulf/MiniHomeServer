@@ -89,6 +89,9 @@ Type=simple
 User=minihome
 Group=minihome
 WorkingDirectory=/opt/minihome
+# systemd creates and maintains writable private SQLite state for minihome.
+StateDirectory=minihome
+StateDirectoryMode=0700
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 Environment=MINIHOME_HOST=0.0.0.0

@@ -71,6 +71,85 @@ if [ -f /usr/local/libexec/minihome-update-worker.py ]; then
 fi
 echo "Резервная копия кода: $backup"
 
+# Important: older installations sometimes have a root-owned SQLite file or
+# SQLite WAL sidecars. Old schemas could start because CREATE TABLE IF NOT EXISTS
+# required no writes; new database tables fail with "readonly database".
+# Back up the live SQLite database before any ownership repair.
+state_dir="/var/lib/minihome"
+if [ ! -d "$state_dir" ] || [ -L "$state_dir" ]; then
+  echo "Каталог данных отсутствует или является символической ссылкой; установка остановлена." >&2
+  exit 1
+fi
+service_user="$(systemctl show -P User minihome.service)"
+if [ "$service_user" != "minihome" ] || ! id minihome >/dev/null 2>&1; then
+  echo "Непредвиденный пользователь minihome.service. Права базы менять нельзя." >&2
+  exit 1
+fi
+for name in minihome.db minihome.db-wal minihome.db-shm minihome.db-journal; do
+  target="$state_dir/$name"
+  if [ -L "$target" ] || { [ -e "$target" ] && [ ! -f "$target" ]; }; then
+    echo "Нестандартный файл SQLite $name. Автоматическое исправление остановлено." >&2
+    exit 1
+  fi
+done
+if [ -f "$state_dir/minihome.db" ]; then
+  python3 - "$state_dir/minihome.db" "$backup/minihome-pre-migration.db" <<'PY'
+import sqlite3, sys
+source = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True, timeout=15)
+destination = sqlite3.connect(sys.argv[2], timeout=15)
+try:
+    source.backup(destination)
+finally:
+    destination.close()
+    source.close()
+print("Создана резервная копия SQLite перед миграцией")
+PY
+  chmod 0600 "$backup/minihome-pre-migration.db"
+fi
+
+# Only repair this application's own state folder and SQLite files. Do not
+# chmod -R, touch credentials, or alter any unrelated system services.
+chown minihome:minihome "$state_dir"
+chmod 0700 "$state_dir"
+for name in minihome.db minihome.db-wal minihome.db-shm minihome.db-journal; do
+  target="$state_dir/$name"
+  if [ -f "$target" ]; then
+    chown minihome:minihome "$target"
+    chmod 0600 "$target"
+  fi
+done
+
+# Check real SQLite write access with minihome privileges WITHOUT changing
+# any table or application data.
+if [ -f "$state_dir/minihome.db" ]; then
+  python3 - <<'PY'
+import os, pwd, sqlite3
+account = pwd.getpwnam("minihome")
+os.setgroups([])
+os.setgid(account.pw_gid)
+os.setuid(account.pw_uid)
+connection = sqlite3.connect(
+    "file:/var/lib/minihome/minihome.db?mode=rw", uri=True, timeout=10
+)
+try:
+    connection.execute("BEGIN IMMEDIATE")
+    connection.rollback()
+finally:
+    connection.close()
+print("SQLite: запись от пользователя minihome разрешена")
+PY
+fi
+
+# Keep the permission fix across future restarts; the systemd manager owns
+# this directory's lifecycle and adjusts ownership before ExecStart.
+install -d -m 0755 /etc/systemd/system/minihome.service.d
+cat > /etc/systemd/system/minihome.service.d/30-state-directory.conf <<'EOF'
+[Service]
+StateDirectory=minihome
+StateDirectoryMode=0700
+EOF
+systemctl daemon-reload
+
 restore_code() {
   echo "Ошибка запуска, возвращаю предыдущий код" >&2
   cp -a "$backup/code/." /opt/minihome/

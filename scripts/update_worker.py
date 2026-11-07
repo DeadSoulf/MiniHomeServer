@@ -141,6 +141,42 @@ def write_manifest():
     os.replace(temp, MANIFEST)
 
 
+def verify_sqlite_permissions():
+    """Fail before deploy when SQLite cannot be written by minihome.
+
+    The privileged updater never silently takes ownership of arbitrary files;
+    on older installations the one-time bootstrap fixes the known data path.
+    """
+    import pwd
+    import stat
+    try:
+        user = pwd.getpwnam("minihome")
+    except KeyError as exc:
+        raise RuntimeError("Системный пользователь minihome отсутствует") from exc
+    if DATA.is_symlink() or not DATA.is_dir():
+        raise RuntimeError("Каталог данных MiniHomeServer недоступен")
+    directory = DATA.stat()
+    if directory.st_uid != user.pw_uid or not (
+        directory.st_mode & stat.S_IWUSR and directory.st_mode & stat.S_IXUSR
+    ):
+        raise RuntimeError(
+            "Каталог SQLite недоступен для записи. Запустите scripts/enable-web-updates.sh"
+        )
+    for name in ("minihome.db", "minihome.db-wal", "minihome.db-shm"):
+        path = DATA / name
+        if path.is_symlink():
+            raise RuntimeError(f"Недопустимая символическая ссылка: {name}")
+        if not path.exists():
+            continue
+        metadata = path.stat()
+        if not path.is_file() or metadata.st_uid != user.pw_uid or not (
+            metadata.st_mode & stat.S_IWUSR
+        ):
+            raise RuntimeError(
+                "SQLite недоступна для записи. Запустите scripts/enable-web-updates.sh"
+            )
+
+
 def store_backup():
     BACKUPS.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(BACKUPS, 0o700)
@@ -242,6 +278,7 @@ def perform(requested):
             write_status("running", "verify", "Проверка файлов обновления", requested)
             safe_source(repo)
             verify_existing_files()
+            verify_sqlite_permissions()
             write_status("running", "backup", "Сохранение предыдущей версии и копии базы данных", requested)
             backup = store_backup()
             write_status("running", "install", "Установка новой версии", requested)
