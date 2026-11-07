@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -30,6 +31,7 @@ REQUEST = DATA / "update-request.json"
 STATUS = DATA / "update-status.json"
 LOCKFILE = Path("/run/minihome-update/lock")
 REVISION = TARGET / ".release-commit"
+MANIFEST = TARGET / ".release-manifest.json"
 FILES = (
     "server.py",
     "static/index.html",
@@ -108,7 +110,31 @@ def safe_source(repo):
         run_command([node, "--check", str(repo / "static/app.js")], timeout=15)
 
 
-def store_backup(code_dir):
+def verify_existing_files():
+    if not MANIFEST.is_file():
+        raise RuntimeError("Нет манифеста установленного кода. Выполните один раз scripts/enable-web-updates.sh")
+    try:
+        hashes = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("Манифест установленного кода повреждён") from exc
+    for name in FILES:
+        path = TARGET / name
+        if not path.is_file() or path.is_symlink():
+            raise RuntimeError(f"Установленный файл отсутствует: {name}")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if hashes.get(name) != digest:
+            raise RuntimeError(f"Локальные изменения в {name}; не перезаписываем их")
+
+
+def write_manifest():
+    hashes = {name: hashlib.sha256((TARGET / name).read_bytes()).hexdigest() for name in FILES}
+    temp = TARGET / ".release-manifest.tmp"
+    temp.write_text(json.dumps(hashes, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(temp, 0o644)
+    os.replace(temp, MANIFEST)
+
+
+def store_backup():
     BACKUPS.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(BACKUPS, 0o700)
     name = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -125,6 +151,8 @@ def store_backup(code_dir):
         shutil.copy2(old, dest)
     if REVISION.is_file():
         shutil.copy2(REVISION, path / "code" / ".release-commit")
+    if MANIFEST.is_file():
+        shutil.copy2(MANIFEST, path / "code" / ".release-manifest.json")
     if WORKER.is_file():
         shutil.copy2(WORKER, path / "update_worker.py")
     dbfile = DATA / "minihome.db"
@@ -157,6 +185,11 @@ def rollback(backup):
         shutil.copy2(previous_sha, REVISION)
     else:
         REVISION.unlink(missing_ok=True)
+    previous_manifest = backup / "code" / ".release-manifest.json"
+    if previous_manifest.is_file():
+        shutil.copy2(previous_manifest, MANIFEST)
+    else:
+        MANIFEST.unlink(missing_ok=True)
     previous_worker = backup / "update_worker.py"
     if previous_worker.is_file():
         shutil.copy2(previous_worker, WORKER)
@@ -170,18 +203,7 @@ def prune_backups():
         shutil.rmtree(path)
 
 
-def record_event(action, detail):
-    try:
-        conn = sqlite3.connect(DATA / "minihome.db", timeout=10)
-        with conn:
-            conn.execute("INSERT INTO events(at,action,detail) VALUES(?,?,?)",
-                         (utc_now(), action, str(detail)[:180]))
-        conn.close()
-    except (OSError, sqlite3.Error):
-        pass
-
-
-def perform(requested):
+ def perform(requested):
     backup = None
     modified = False
     try:
@@ -203,8 +225,9 @@ def perform(requested):
                 return
             write_status("running", "verify", "Проверка файлов обновления", requested)
             safe_source(repo)
+            verify_existing_files()
             write_status("running", "backup", "Сохранение предыдущей версии и копии базы данных", requested)
-            backup = store_backup(TARGET)
+            backup = store_backup()
             write_status("running", "install", "Установка новой версии", requested)
             modified = True
             deploy_files(repo)
@@ -214,11 +237,11 @@ def perform(requested):
                 raise RuntimeError("Новая версия не ответила на запрос проверки здоровья")
             REVISION.write_text(actual + "\n", encoding="ascii")
             os.chmod(REVISION, 0o644)
+            write_manifest()
             # After the new application passed health checks, upgrade the helper itself.
             shutil.copy2(repo / WORKER_SOURCE, WORKER)
             os.chmod(WORKER, 0o755)
             write_status("success", "complete", "Обновление установлено успешно", requested, actual)
-            record_event("update.success", f"Версия обновлена до {actual[:12]}")
             prune_backups()
     except Exception as exc:
         detail = str(exc)
@@ -229,13 +252,11 @@ def perform(requested):
                 if health():
                     write_status("rolled_back", "complete",
                                  f"Предыдущая версия восстановлена: {detail}", requested)
-                    record_event("update.rollback", detail)
                     return
                 detail += "; прежняя версия после восстановления не отвечает"
             except Exception as rollback_error:
                 detail += "; ошибка отката: " + str(rollback_error)
         write_status("failed", "complete", detail, requested)
-        record_event("update.failed", detail)
 
 
 def main():
