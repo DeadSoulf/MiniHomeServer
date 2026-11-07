@@ -7,6 +7,13 @@ become controllable once a validated integration has been installed.
 from __future__ import annotations
 
 import base64
+import errno
+import ipaddress
+import shutil
+import socket
+import struct
+import subprocess
+import concurrent.futures
 import binascii
 import hmac
 import hashlib
@@ -43,13 +50,20 @@ SESSION_TTL = 12 * 3600
 KINDS = {"house", "boiler", "camera", "light", "gate", "sensor", "switch", "other"}
 FAILURES: dict[str, list[float]] = {}
 LOCK = threading.RLock()
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 GITHUB_API = "https://api.github.com/repos/DeadSoulf/MiniHomeServer/commits/main"
 REVISION_FILE = BASE / ".release-commit"
 UPDATE_STATUS = DATA / "update-status.json"
 UPDATE_REQUEST = DATA / "update-request.json"
 UPDATE_UNIT = Path("/etc/systemd/system/minihome-update.path")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SCAN_LOCK = threading.RLock()
+NETWORK_SCAN = {"running": False, "last_error": "", "started_at": None,
+                "finished_at": None, "subnets": [], "found": 0}
+ZIGBEE_SCAN = {"running": False, "last_error": "", "finished_at": None,
+               "found": 0, "connected": False}
+GATEWAY_CONFIG = DATA / "zigbee-gateway.json"
+
 
 
 def timestamp() -> str:
@@ -95,6 +109,28 @@ def init_db():
             token_hash TEXT PRIMARY KEY,
             csrf TEXT NOT NULL,
             expires REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS lan_nodes (
+            id TEXT PRIMARY KEY,
+            ip TEXT NOT NULL,
+            mac TEXT NOT NULL DEFAULT '',
+            hostname TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL DEFAULT 'other',
+            vendor TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            online INTEGER NOT NULL DEFAULT 0,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS zigbee_nodes (
+            ieee TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            model TEXT NOT NULL DEFAULT '',
+            vendor TEXT NOT NULL DEFAULT '',
+            availability TEXT NOT NULL DEFAULT 'unknown',
+            bridge_ip TEXT NOT NULL,
+            last_seen TEXT NOT NULL
         );
         """)
         db.execute("PRAGMA journal_mode=WAL")
@@ -246,6 +282,593 @@ def image_bytes(data_url: str):
     if not valid[image_type]:
         raise ValueError("Содержимое файла не соответствует формату")
     return raw, "image/" + image_type
+
+
+
+# LAN discovery is scoped to the server's directly connected private IPv4 /24
+# networks. Never scan routed/public networks or probe arbitrary user-supplied
+# targets. Only a manual button or opening the Network page starts a scan.
+def _ip_json(arguments):
+    binary = shutil.which("ip")
+    if not binary:
+        raise RuntimeError("На Debian отсутствует утилита ip (пакет iproute2)")
+    result = subprocess.run([binary, "-j", *arguments], capture_output=True,
+                            text=True, timeout=5, check=False)
+    if result.returncode:
+        raise RuntimeError("Не удалось получить сетевые параметры Debian")
+    try:
+        return json.loads(result.stdout)
+    except ValueError as exc:
+        raise RuntimeError("Некорректный ответ iproute2") from exc
+
+
+def local_networks():
+    subnets = []
+    for item in _ip_json(["-4", "addr", "show"]):
+        ifname = item.get("ifname", "")
+        if ifname.startswith(("lo", "docker", "veth", "br-", "virbr", "tun", "tap", "tailscale")):
+            continue
+        for address in item.get("addr_info", []):
+            if address.get("family") != "inet" or address.get("scope") != "global":
+                continue
+            try:
+                local = ipaddress.IPv4Address(address["local"])
+                prefix = int(address["prefixlen"])
+                net = ipaddress.IPv4Network(f"{local}/{prefix}", strict=False)
+            except (KeyError, ValueError):
+                continue
+            if (not local.is_private or local.is_loopback or local.is_link_local
+                or not 24 <= prefix <= 30 or net.num_addresses > 256):
+                continue
+            subnets.append({"interface": ifname, "local_ip": str(local), "cidr": str(net)})
+    # Never scan more than two interfaces at a time, e.g. LAN and guest LAN.
+    return subnets[:2]
+
+
+def _scope_lookup(scopes):
+    return [ipaddress.IPv4Network(item["cidr"], strict=False) for item in scopes]
+
+
+def _in_scope(ip, nets):
+    try:
+        address = ipaddress.IPv4Address(ip)
+        return any(address in net for net in nets)
+    except ValueError:
+        return False
+
+
+def neighbor_cache(scopes):
+    allowed_interfaces = {s["interface"] for s in scopes}
+    result = {}
+    try:
+        items = _ip_json(["-4", "neigh", "show"])
+    except RuntimeError:
+        return result
+    nets = _scope_lookup(scopes)
+    for item in items:
+        ip = item.get("dst", "")
+        mac = str(item.get("lladdr", "")).lower()
+        status = item.get("state", "")
+        if (item.get("dev") not in allowed_interfaces or
+                not _in_scope(ip, nets) or
+                status in {"FAILED", "INCOMPLETE", "NONE"} or
+                not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac)):
+            continue
+        result[ip] = mac
+    return result
+
+
+def _tcp_arp_probe(ip):
+    # A single TCP connection attempt induces local ARP resolution. No
+    # payload, login attempt, camera request or device command is sent.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as conn:
+            conn.settimeout(0.3)
+            result = conn.connect_ex((ip, 80))
+            return result in (0, errno.ECONNREFUSED)
+    except OSError:
+        return False
+
+
+def _ssdp_devices(nets):
+    found = {}
+    probe = (b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n"
+             b'MAN: "ssdp:discover"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n')
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as sock:
+            sock.settimeout(0.35)
+            sock.sendto(probe, ("239.255.255.250", 1900))
+            stop = time.monotonic() + 1.5
+            while time.monotonic() < stop:
+                try:
+                    data, endpoint = sock.recvfrom(8192)
+                except socket.timeout:
+                    continue
+                ip = endpoint[0]
+                if not _in_scope(ip, nets):
+                    continue
+                decoded = data.decode("utf-8", "replace")
+                if not decoded.startswith("HTTP/1.1 200"):
+                    continue
+                fields = {}
+                for line in decoded.splitlines()[1:]:
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        fields[key.strip().lower()] = value.strip()
+                name = fields.get("usn", "")[:100]
+                server = fields.get("server", "")[:100]
+                category = "other"
+                labels = (server + " " + name + " " + fields.get("st", "")).lower()
+                if any(key in labels for key in ("zigbee", "hue bridge", "deconz", "zigate")):
+                    category = "zigbee-gateway"
+                elif "camera" in labels or "onvif" in labels:
+                    category = "camera"
+                elif "router" in labels or "internetgatewaydevice" in labels:
+                    category = "router"
+                found[ip] = {"hostname": "", "vendor": server, "kind": category}
+    except OSError:
+        pass
+    return found
+
+
+def _dns_name(data, start, visited=None):
+    # DNS name decompression for mDNS A/SRV records; malformed responses skipped.
+    if visited is None:
+        visited = set()
+    labels = []
+    offset = start
+    consumed = None
+    for _ in range(25):
+        if offset >= len(data) or offset in visited:
+            raise ValueError("Invalid DNS name")
+        visited.add(offset)
+        length = data[offset]
+        if length & 0xC0 == 0xC0:
+            if offset + 1 >= len(data):
+                raise ValueError("Invalid DNS pointer")
+            ptr = ((length & 0x3F) << 8) | data[offset + 1]
+            if consumed is None:
+                consumed = offset + 2
+            offset = ptr
+            continue
+        if length & 0xC0:
+            raise ValueError("Invalid DNS label")
+        offset += 1
+        if length == 0:
+            return ".".join(labels).rstrip("."), (consumed if consumed is not None else offset)
+        if offset + length > len(data):
+            raise ValueError("Truncated DNS name")
+        labels.append(data[offset:offset + length].decode("utf-8", "replace"))
+        offset += length
+    raise ValueError("Too many DNS labels")
+
+
+def _mdns_records(data):
+    """Return (host A records, SRV service labels) from one DNS response."""
+    if len(data) < 12:
+        return {}, {}
+    _, _, queries, answers, authority, additionals = struct.unpack("!6H", data[:12])
+    off = 12
+    hosts = {}
+    srv = {}
+    try:
+        for _ in range(min(queries, 20)):
+            _, off = _dns_name(data, off)
+            off += 4
+            if off > len(data):
+                return {}, {}
+        for _ in range(min(answers + authority + additionals, 140)):
+            name, off = _dns_name(data, off)
+            if off + 10 > len(data):
+                break
+            kind, _cls, _ttl, length = struct.unpack("!HHIH", data[off:off + 10])
+            start = off + 10
+            end = start + length
+            if end > len(data):
+                break
+            if kind == 1 and length == 4:
+                hosts[name.lower()] = socket.inet_ntoa(data[start:end])
+            if kind == 33 and length >= 7:
+                target, _ = _dns_name(data, start + 6)
+                srv[name] = target.lower()
+            off = end
+    except (ValueError, struct.error, OSError):
+        pass
+    return hosts, srv
+
+
+def _mdns_devices(nets):
+    discovered = {}
+    hosts, services = {}, {}
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as sock:
+            sock.settimeout(0.35)
+            # Request unicast replies to our ephemeral UDP port (QU bit).
+            for qname in ("_http._tcp.local", "_hap._tcp.local",
+                          "_googlecast._tcp.local", "_services._dns-sd._udp.local"):
+                wire = b"".join(bytes([len(x)]) + x.encode("ascii") for x in qname.split(".")) + b"\x00"
+                query = b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00" + wire + b"\x00\x0c\x80\x01"
+                sock.sendto(query, ("224.0.0.251", 5353))
+            deadline = time.monotonic() + 1.3
+            while time.monotonic() < deadline:
+                try:
+                    payload, _ = sock.recvfrom(16384)
+                except socket.timeout:
+                    continue
+                seen_hosts, seen_services = _mdns_records(payload)
+                hosts.update(seen_hosts)
+                services.update(seen_services)
+    except OSError:
+        return discovered
+    for hostname, ip in hosts.items():
+        if _in_scope(ip, nets):
+            discovered[ip] = {"hostname": hostname.rstrip(".local"), "vendor": "", "kind": "other"}
+    for service, target in services.items():
+        ip = hosts.get(target, "")
+        if not _in_scope(ip, nets):
+            continue
+        label = service.split("._", 1)[0]
+        if label and (ip not in discovered or not discovered[ip]["hostname"]):
+            discovered[ip] = {"hostname": label[:90], "vendor": "", "kind": "other"}
+    return discovered
+
+
+def _scan_lan():
+    scopes = local_networks()
+    if not scopes:
+        raise RuntimeError("Нет доступной частной IPv4 сети /24–/30. Проверьте подключение Debian")
+    nets = _scope_lookup(scopes)
+    prior = neighbor_cache(scopes)
+    targets = sorted({
+        str(addr)
+        for net in nets
+        for addr in net.hosts()
+        if str(addr) not in {scope["local_ip"] for scope in scopes}
+    }, key=lambda value: int(ipaddress.IPv4Address(value)))
+    active = set()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
+        for address, succeeded in zip(targets, pool.map(_tcp_arp_probe, targets)):
+            if succeeded:
+                active.add(address)
+    neighbors = neighbor_cache(scopes)
+    ssdp = _ssdp_devices(nets)
+    mdns = _mdns_devices(nets)
+    seen = set(prior) | set(neighbors) | active | set(ssdp) | set(mdns)
+    now = timestamp()
+    with database() as db:
+        for ip in sorted(seen, key=lambda value: int(ipaddress.IPv4Address(value))):
+            mac = neighbors.get(ip) or prior.get(ip) or ""
+            identifier = "mac:" + mac if mac else "ip:" + ip
+            db.execute("DELETE FROM lan_nodes WHERE ip=? AND id<>?", (ip, identifier))
+            info = mdns.get(ip) or ssdp.get(ip) or {}
+            extra = ssdp.get(ip, {})
+            hostname = str(info.get("hostname", ""))[:100]
+            vendor = str(extra.get("vendor", ""))[:100]
+            kind = extra.get("kind", "other")
+            if kind not in {"other", "zigbee-gateway", "camera", "router"}:
+                kind = "other"
+            online = int(ip in active or ip in neighbors or ip in ssdp or ip in mdns)
+            db.execute("""
+                INSERT INTO lan_nodes(id,ip,mac,hostname,kind,vendor,source,online,first_seen,last_seen)
+                VALUES(?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET ip=excluded.ip,mac=excluded.mac,
+                    hostname=CASE WHEN excluded.hostname<>'' THEN excluded.hostname ELSE lan_nodes.hostname END,
+                    kind=CASE WHEN excluded.kind<>'other' THEN excluded.kind ELSE lan_nodes.kind END,
+                    vendor=CASE WHEN excluded.vendor<>'' THEN excluded.vendor ELSE lan_nodes.vendor END,
+                    source=excluded.source,online=excluded.online,last_seen=excluded.last_seen
+            """, (identifier, ip, mac, hostname, kind, vendor, "ARP/mDNS/SSDP",
+                  online, now, now))
+        for row in db.execute("SELECT id,ip FROM lan_nodes").fetchall():
+            if row["ip"] not in seen:
+                db.execute("UPDATE lan_nodes SET online=0 WHERE id=?", (row["id"],))
+        db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('lan_last_scan',?)", (now,))
+        add_event(db, "network.scan", f"Поиск в локальной сети: найдено {len(seen)} устройств")
+    return {"found": len(seen), "subnets": [s["cidr"] for s in scopes]}
+
+
+def _network_scan_worker():
+    try:
+        result = _scan_lan()
+        with SCAN_LOCK:
+            NETWORK_SCAN.update({"last_error": "", "found": result["found"],
+                                 "subnets": result["subnets"], "finished_at": timestamp()})
+    except Exception as exc:
+        with SCAN_LOCK:
+            NETWORK_SCAN.update({"last_error": str(exc)[:180], "finished_at": timestamp()})
+    finally:
+        with SCAN_LOCK:
+            NETWORK_SCAN["running"] = False
+
+
+def launch_network_scan():
+    with SCAN_LOCK:
+        if NETWORK_SCAN["running"]:
+            return False
+        if NETWORK_SCAN["finished_at"]:
+            try:
+                elapsed = time.time() - datetime.fromisoformat(NETWORK_SCAN["finished_at"]).timestamp()
+                if elapsed < 30:
+                    return False
+            except ValueError:
+                pass
+        NETWORK_SCAN.update({"running": True, "last_error": "",
+                             "started_at": timestamp()})
+    threading.Thread(target=_network_scan_worker, name="lan-discovery", daemon=True).start()
+    return True
+
+
+def network_snapshot(automatic=False):
+    with database() as db:
+        devices = [dict(r) for r in db.execute(
+            "SELECT id,ip,mac,hostname,kind,vendor,source,online,first_seen,last_seen "
+            "FROM lan_nodes ORDER BY online DESC,ip")]
+        zigbee = [dict(r) for r in db.execute(
+            "SELECT ieee,name,type,model,vendor,availability,bridge_ip,last_seen "
+            "FROM zigbee_nodes ORDER BY name COLLATE NOCASE")]
+        last = setting(db, "lan_last_scan")
+    with SCAN_LOCK:
+        scanning = dict(NETWORK_SCAN)
+        z_status = dict(ZIGBEE_SCAN)
+    if automatic and not scanning["running"]:
+        try:
+            if not last or time.time() - datetime.fromisoformat(last).timestamp() > 600:
+                launch_network_scan()
+        except ValueError:
+            launch_network_scan()
+    return {"lan": devices, "zigbee": zigbee, "scan": scanning,
+            "zigbee_status": z_status, "last_scan": last, "gateway": public_gateway_settings()}
+
+
+def _safe_gateway_ip(value):
+    if not isinstance(value, str):
+        raise ValueError("Введите IP-адрес MQTT-шлюза")
+    try:
+        addr = ipaddress.IPv4Address(value)
+    except ValueError as exc:
+        raise ValueError("Укажите IPv4-адрес, например 10.10.10.20") from exc
+    if not addr.is_private or addr.is_link_local or addr.is_multicast:
+        raise ValueError("Шлюз MQTT должен быть доступен по частному IPv4-адресу")
+    if not addr.is_loopback:
+        nets = _scope_lookup(local_networks())
+        if not any(addr in net for net in nets):
+            raise ValueError("Адрес шлюза должен находиться в одной из локальных подсетей Debian")
+    return str(addr)
+
+
+def gateway_settings():
+    try:
+        raw = GATEWAY_CONFIG.read_bytes()
+        if len(raw) > 8192:
+            raise ValueError("Bad gateway settings")
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def public_gateway_settings():
+    config = gateway_settings()
+    return {"configured": bool(config.get("host")),
+            "mode": "zigbee2mqtt",
+            "host": config.get("host", ""),
+            "port": config.get("port", 1883),
+            "base_topic": config.get("base_topic", "zigbee2mqtt"),
+            "username": config.get("username", ""),
+            "password_configured": bool(config.get("password"))}
+
+
+def set_gateway_settings(data):
+    config = gateway_settings()
+    host = _safe_gateway_ip(data.get("host"))
+    port = data.get("port", 1883)
+    if type(port) is not int or port < 1 or port > 65535:
+        raise ValueError("Неверный порт MQTT")
+    base = data.get("base_topic", "zigbee2mqtt")
+    if not isinstance(base, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", base):
+        raise ValueError("Имя базового MQTT-топика должно состоять из латинских букв, цифр, _ или -")
+    username = data.get("username", "")
+    if not isinstance(username, str) or len(username) > 128:
+        raise ValueError("Некорректное имя пользователя MQTT")
+    new_pass = data.get("password", "")
+    if not isinstance(new_pass, str) or len(new_pass) > 256:
+        raise ValueError("Недопустимый MQTT-пароль")
+    if new_pass:
+        config["password"] = new_pass
+    elif data.get("clear_password") is True:
+        config["password"] = ""
+    config.update({"host": host, "port": port, "base_topic": base, "username": username})
+    tmp = DATA / (".zigbee-config-" + secrets.token_hex(8))
+    try:
+        with tmp.open("x", encoding="utf-8") as handle:
+            json.dump(config, handle)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, GATEWAY_CONFIG)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return public_gateway_settings()
+
+
+def _mqtt_remaining_length(n):
+    encoded = bytearray()
+    while True:
+        digit = n % 128
+        n //= 128
+        if n:
+            digit |= 0x80
+        encoded.append(digit)
+        if not n:
+            return bytes(encoded)
+
+
+def _mqtt_string(text):
+    raw = text.encode("utf-8")
+    if len(raw) > 65535:
+        raise ValueError("MQTT field too long")
+    return struct.pack("!H", len(raw)) + raw
+
+
+def _mqtt_exact(sock, length):
+    chunks = []
+    while length:
+        data = sock.recv(length)
+        if not data:
+            raise RuntimeError("MQTT-сервер закрыл соединение")
+        length -= len(data)
+        chunks.append(data)
+    return b"".join(chunks)
+
+
+def _mqtt_packet(sock):
+    header = _mqtt_exact(sock, 1)[0]
+    count, multiplier = 0, 1
+    for _ in range(4):
+        digit = _mqtt_exact(sock, 1)[0]
+        count += (digit & 127) * multiplier
+        if not digit & 128:
+            break
+        multiplier *= 128
+    else:
+        raise ValueError("Invalid MQTT packet size")
+    if count > 1024 * 1024:
+        raise ValueError("MQTT пакет слишком большой")
+    return header, _mqtt_exact(sock, count)
+
+
+def _mqtt_inventory(config):
+    # Read-only MQTT v3.1.1: CONNECT + SUBSCRIBE. Never publish /set commands.
+    host, port = config["host"], config["port"]
+    base = config["base_topic"]
+    username, password = config.get("username", ""), config.get("password", "")
+    flags = 0x02
+    data = _mqtt_string("minihome-" + secrets.token_hex(4))
+    if username:
+        flags |= 0x80
+        data += _mqtt_string(username)
+        if password:
+            flags |= 0x40
+            data += _mqtt_string(password)
+    elif password:
+        raise ValueError("Для MQTT-пароля нужно указать имя пользователя")
+    variable = _mqtt_string("MQTT") + bytes([4, flags]) + struct.pack("!H", 20)
+    payload = variable + data
+    with socket.create_connection((host, port), timeout=4) as conn:
+        conn.settimeout(3)
+        conn.sendall(b"\x10" + _mqtt_remaining_length(len(payload)) + payload)
+        kind, reply = _mqtt_packet(conn)
+        if kind != 0x20 or len(reply) != 2 or reply[1] != 0:
+            raise RuntimeError("MQTT-брокер отклонил подключение (проверьте логин/пароль)")
+        topics = [base + "/bridge/devices", base + "/bridge/state",
+                  base + "/+/availability"]
+        body = b"\x00\x01" + b"".join(_mqtt_string(topic) + b"\x00" for topic in topics)
+        conn.sendall(b"\x82" + _mqtt_remaining_length(len(body)) + body)
+        devices, availability = None, {}
+        until = time.monotonic() + 6
+        while time.monotonic() < until:
+            try:
+                header, data = _mqtt_packet(conn)
+            except socket.timeout:
+                continue
+            if header >> 4 != 3:
+                continue
+            if len(data) < 2:
+                continue
+            n = struct.unpack("!H", data[:2])[0]
+            if n + 2 > len(data):
+                continue
+            topic = data[2:2 + n].decode("utf-8", "replace")
+            position = 2 + n
+            if (header >> 1) & 0x03:
+                position += 2
+            message = data[position:]
+            if topic == base + "/bridge/devices":
+                try:
+                    decoded = json.loads(message)
+                    if isinstance(decoded, list) and len(decoded) <= 2000:
+                        devices = decoded
+                except (UnicodeDecodeError, ValueError):
+                    continue
+            elif topic.endswith("/availability") and topic.startswith(base + "/"):
+                try:
+                    payload = json.loads(message)
+                    state = payload.get("state") if isinstance(payload, dict) else message.decode("utf-8", "replace")
+                    friendly = topic[len(base) + 1:-len("/availability")]
+                    if state in ("online", "offline"):
+                        availability[friendly] = state
+                except ValueError:
+                    continue
+        try:
+            conn.sendall(b"\xe0\x00")
+        except OSError:
+            pass
+    if devices is None:
+        raise RuntimeError("Не получен список Zigbee2MQTT bridge/devices. Проверьте базовый топик и retained MQTT")
+    return devices, availability
+
+
+def _store_zigbee_devices(items, availability, gateway_ip):
+    now = timestamp()
+    rows = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ieee = str(item.get("ieee_address") or "").lower()
+        if not re.fullmatch(r"0x[0-9a-f]{16}", ieee):
+            continue
+        definition = item.get("definition") or {}
+        if not isinstance(definition, dict):
+            definition = {}
+        friendly = str(item.get("friendly_name") or ieee)[:100]
+        state = availability.get(friendly, "unknown")
+        kind = str(item.get("type") or "Unknown")[:40]
+        rows.append((ieee, friendly, kind, str(definition.get("model") or item.get("model_id") or "")[:100],
+                     str(definition.get("vendor") or "")[:100], state, gateway_ip, now))
+    with database() as db:
+        for row in rows:
+            db.execute("""
+                INSERT INTO zigbee_nodes(ieee,name,type,model,vendor,availability,bridge_ip,last_seen)
+                VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(ieee) DO UPDATE SET name=excluded.name,type=excluded.type,
+                    model=excluded.model,vendor=excluded.vendor,
+                    availability=excluded.availability,bridge_ip=excluded.bridge_ip,
+                    last_seen=excluded.last_seen
+            """, row)
+        keep = {row[0] for row in rows}
+        for row in db.execute("SELECT ieee FROM zigbee_nodes WHERE bridge_ip=?", (gateway_ip,)).fetchall():
+            if row["ieee"] not in keep:
+                db.execute("DELETE FROM zigbee_nodes WHERE ieee=?", (row["ieee"],))
+        add_event(db, "zigbee.refresh", f"Zigbee2MQTT: получено {len(rows)} устройств")
+    return len(rows)
+
+
+def _zigbee_scan_worker():
+    try:
+        settings = gateway_settings()
+        if not settings.get("host"):
+            raise RuntimeError("Настройте IP MQTT-шлюза")
+        _safe_gateway_ip(settings["host"])
+        items, availability = _mqtt_inventory(settings)
+        found = _store_zigbee_devices(items, availability, settings["host"])
+        with SCAN_LOCK:
+            ZIGBEE_SCAN.update({"found": found, "connected": True,
+                                "last_error": "", "finished_at": timestamp()})
+    except Exception as exc:
+        with SCAN_LOCK:
+            ZIGBEE_SCAN.update({"connected": False, "last_error": str(exc)[:180],
+                                "finished_at": timestamp()})
+    finally:
+        with SCAN_LOCK:
+            ZIGBEE_SCAN["running"] = False
+
+
+def launch_zigbee_scan():
+    with SCAN_LOCK:
+        if ZIGBEE_SCAN["running"]:
+            return False
+        ZIGBEE_SCAN["running"] = True
+        ZIGBEE_SCAN["last_error"] = ""
+    threading.Thread(target=_zigbee_scan_worker, name="zigbee-inventory", daemon=True).start()
+    return True
+
 
 
 class Handler(BaseHTTPRequestHandler):
