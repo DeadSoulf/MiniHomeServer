@@ -218,13 +218,16 @@ def snapshot() -> dict:
             "SELECT id,at,action,detail FROM events ORDER BY id DESC LIMIT 60"
         )]
         stamp = setting(db, "map_updated")
-        return {
-            "version": VERSION,
-            "devices": devices,
-            "events": events,
-            "map_url": f"/media/territory?v={stamp}" if stamp else None,
-            "integrations": [],
-        }
+    with SCAN_LOCK:
+        zigbee_connected = bool(ZIGBEE_SCAN["connected"])
+    return {
+        "version": VERSION,
+        "devices": devices,
+        "events": events,
+        "map_url": f"/media/territory?v={stamp}" if stamp else None,
+        "integrations": ([{"name": "Zigbee2MQTT", "connected": True}]
+                         if zigbee_connected else []),
+    }
 
 
 def text_field(data, key, limit=100, required=False) -> str:
@@ -289,7 +292,10 @@ def image_bytes(data_url: str):
 # networks. Never scan routed/public networks or probe arbitrary user-supplied
 # targets. Only a manual button or opening the Network page starts a scan.
 def _ip_json(arguments):
-    binary = shutil.which("ip")
+    binary = shutil.which("ip") or next(
+        (path for path in ("/usr/sbin/ip", "/usr/bin/ip", "/sbin/ip") if os.path.isfile(path)),
+        None
+    )
     if not binary:
         raise RuntimeError("На Debian отсутствует утилита ip (пакет iproute2)")
     result = subprocess.run([binary, "-j", *arguments], capture_output=True,
