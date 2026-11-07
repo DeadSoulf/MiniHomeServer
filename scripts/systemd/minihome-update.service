@@ -18,7 +18,10 @@ PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
-CapabilityBoundingSet=
+# The application data directory is owned 0700 by minihome; the updater
+# needs DAC override to read its request and back up SQLite without weakening
+# the application's private-directory permissions.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE
 AmbientCapabilities=
 ReadWritePaths=/opt/minihome /opt/minihome-backups /var/lib/minihome /usr/local/libexec
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
