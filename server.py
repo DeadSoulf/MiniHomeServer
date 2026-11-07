@@ -29,6 +29,9 @@ BASE = Path(__file__).resolve().parent
 DATA = Path(os.getenv("MINIHOME_DATA_DIR", str(BASE / "data"))).resolve()
 DB = DATA / "minihome.db"
 PASSWORD = os.getenv("MINIHOME_ADMIN_PASSWORD", "")
+PASSWORD_FILE = os.getenv("MINIHOME_ADMIN_PASSWORD_FILE")
+if not PASSWORD and PASSWORD_FILE:
+    PASSWORD = Path(PASSWORD_FILE).read_text(encoding="utf-8").rstrip("\r\n")
 HOST = os.getenv("MINIHOME_HOST", "127.0.0.1")
 PORT = int(os.getenv("MINIHOME_PORT", "8080"))
 SECURE_COOKIE = os.getenv("MINIHOME_COOKIE_SECURE", "0") == "1"
