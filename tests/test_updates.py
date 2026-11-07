@@ -143,7 +143,7 @@ class WorkerIntegrityTests(unittest.TestCase):
             worker.REVISION = worker.TARGET / ".release-commit"
             worker.MANIFEST = worker.TARGET / ".release-manifest.json"
             worker.WORKER = root / "worker.py"
-            worker.REVISION.write_text("b" * 40 + "\\n")
+            worker.REVISION.write_text("b" * 40)
             for name in worker.FILES:
                 dest = worker.TARGET / name
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +156,7 @@ class WorkerIntegrityTests(unittest.TestCase):
             conn.close()
             backup = worker.store_backup()
             (worker.TARGET / "server.py").write_text("broken code")
-            worker.REVISION.write_text("a" * 40 + "\\n")
+            worker.REVISION.write_text("a" * 40)
             with patch.object(worker, "run_command", return_value=""):
                 worker.rollback(backup)
             self.assertEqual((worker.TARGET / "server.py").read_bytes(),
