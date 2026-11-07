@@ -32,7 +32,7 @@ if ! "$python_exec" - <<'PY'
 import socket
 s = socket.socket()
 try:
-    s.bind(('127.0.0.1', 8080))
+    s.bind(('0.0.0.0', 8080))
 except OSError:
     raise SystemExit("Порт 127.0.0.1:8080 уже занят. Установка остановлена.")
 finally:
@@ -91,7 +91,7 @@ Group=minihome
 WorkingDirectory=/opt/minihome
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
-Environment=MINIHOME_HOST=127.0.0.1
+Environment=MINIHOME_HOST=0.0.0.0
 Environment=MINIHOME_PORT=8080
 Environment=MINIHOME_DATA_DIR=/var/lib/minihome
 Environment=MINIHOME_ADMIN_PASSWORD_FILE=/etc/minihome/admin-password
@@ -127,8 +127,9 @@ except Exception as e:
     raise SystemExit('Не удалось проверить панель: ' + str(e))
 PY
 then
-  echo "MiniHomeServer установлен и работает на http://127.0.0.1:8080"
-  echo "Открытие через SSH-туннель: ssh -L 8080:127.0.0.1:8080 texnik@SERVER_IP"
+  echo "MiniHomeServer запущен на 0.0.0.0:8080 (на всех сетевых интерфейсах)"
+  echo "В браузере: http://IP_СЕРВЕРА:8080 (если есть разрешение в firewall / проброс порта)"
+  echo "ВАЖНО: подключение HTTP не шифруется; для выхода в интернет нужен HTTPS."
 else
   echo "Служба установлена, но запуск не подтвердился. Проверьте: journalctl -u minihome -n 50 --no-pager" >&2
   exit 1
