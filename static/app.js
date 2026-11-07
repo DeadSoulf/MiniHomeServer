@@ -1,4 +1,4 @@
-/* MiniHomeServer dashboard v0.3.0 — LAN and Zigbee inventory, no demo telemetry. */
+/* MiniHomeServer dashboard v0.3.1 — more reliable manual updates. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -22,6 +22,7 @@ const actions = {
   "update.success": "Установлено обновление",
   "update.failed": "Ошибка обновления",
   "update.rollback": "Откат обновления",
+  "update.recovered": "Очередь обновления восстановлена",
   "network.scan": "Поиск устройств сети",
   "zigbee.configured": "Шлюз Zigbee настроен",
   "zigbee.refresh": "Список Zigbee обновлён",
@@ -80,7 +81,9 @@ async function api(path, method = "GET", data = undefined) {
   try { payload = await resp.json(); } catch { /* e.g. a proxy error */ }
   if (!resp.ok) {
     if (resp.status === 401 && path !== "/api/login") showLogin();
-    throw new Error(payload.error || "Ошибка подключения к серверу");
+    const error = new Error(payload.error || "Ошибка подключения к серверу");
+    error.status = resp.status;
+    throw error;
   }
   return payload;
 }
@@ -413,6 +416,7 @@ const phaseLabels = {
   success: "Установлено",
   failed: "Ошибка обновления",
   rolled_back: "Выполнен откат",
+  stalled: "Обновление зависло",
 };
 function showUpdateStatus() {
   if (!updateInfo) return;
@@ -428,7 +432,9 @@ function showUpdateStatus() {
   } else {
     $("update-message").textContent = updateInfo.message || "Готово к проверке GitHub.";
   }
-  const active = stage === "queued" || stage === "running";
+  const active = stage === "queued" || stage === "running" || stage === "stalled";
+  $("update-recover").hidden = stage !== "stalled";
+  $("update-recover").disabled = updateInstalling || updateChecking;
   $("update-check").disabled = active || updateChecking || updateInstalling;
   $("update-check").textContent = updateChecking ? "Проверяем GitHub…" : "Проверить GitHub";
   $("update-install").disabled = !updateInfo.enabled || !updateAvailable || !updateLatest || active || updateInstalling || updateChecking;
@@ -447,7 +453,7 @@ async function loadUpdateStatus() {
       notify("Обновление завершено. Загружаем новую версию панели.");
       setTimeout(() => window.location.reload(), 1100);
     }
-    if (updateRequestedHere && (next.state === "failed" || next.state === "rolled_back")) {
+    if (updateRequestedHere && (next.state === "failed" || next.state === "rolled_back" || next.state === "stalled")) {
       updateRequestedHere = false;
       notify(next.message || "Обновление не завершилось", true);
     }
@@ -496,11 +502,35 @@ async function installUpdate() {
     notify("Обновление запущено");
     setTimeout(loadUpdateStatus, 900);
   } catch (error) {
-    notify(error.message, true);
+    if (error.status === 409) {
+      // Another commit may have appeared in main since the user checked.
+      // Show the new SHA and require an explicit second confirmation.
+      await checkForUpdate();
+      notify("Версия GitHub изменилась или уже установлена. Проверьте номер и повторите.", true);
+    } else {
+      notify(error.message, true);
+    }
     await loadUpdateStatus();
   } finally {
     updateInstalling = false;
     showUpdateStatus();
+  }
+}
+async function recoverStalledUpdate() {
+  if (!updateInfo || updateInfo.state !== "stalled") return;
+  if (!confirm("Сбросить зависшую заявку? Операция будет разрешена только после остановки системной службы.")) return;
+  $("update-recover").disabled = true;
+  try {
+    await api("/api/update/recover", "POST", {});
+    updateRequestedHere = false;
+    updateAvailable = false;
+    updateLatest = null;
+    await loadUpdateStatus();
+    notify("Очередь восстановлена. Нажмите «Проверить GitHub».");
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    $("update-recover").disabled = false;
   }
 }
 
@@ -686,6 +716,7 @@ function installHandlers() {
   $("zigbee-form").addEventListener("submit", saveZigbeeGateway);
   $("update-check").addEventListener("click", checkForUpdate);
   $("update-install").addEventListener("click", installUpdate);
+  $("update-recover").addEventListener("click", recoverStalledUpdate);
   $("logout-btn").addEventListener("click", async () => {
     try { await api("/api/logout", "POST", {}); }
     catch { /* clear local session anyway */ }

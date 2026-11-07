@@ -221,14 +221,23 @@ def perform(requested):
             repo = Path(folder) / "source"
             run_command([
                 "git", "-c", "core.hooksPath=/dev/null", "clone", "--quiet",
-                "--depth", "1", "--single-branch", "--branch", "main",
+                "--depth", "50", "--single-branch", "--branch", "main",
                 "--", SOURCE_URL, str(repo),
             ], timeout=150)
+            head_sha = run_command(["git", "-C", str(repo), "rev-parse", "HEAD"], timeout=10)
+            if not _SHA.fullmatch(head_sha):
+                raise RuntimeError("GitHub вернул некорректную ревизию")
+            # If main advances after user approval, allow installing the
+            # specifically approved SHA while it remains in main history.
+            run_command(["git", "-C", str(repo), "merge-base",
+                         "--is-ancestor", requested, head_sha], timeout=10)
+            run_command(["git", "-C", str(repo), "checkout", "--quiet",
+                         "--detach", requested], timeout=20)
             actual = run_command(["git", "-C", str(repo), "rev-parse", "HEAD"], timeout=10)
-            if not _SHA.fullmatch(actual) or requested != actual:
-                raise RuntimeError("Ветка main изменилась. Проверьте версию ещё раз")
-            if installed_sha() == actual:
-                write_status("success", "complete", "Уже установлена последняя версия", actual)
+            if actual != requested:
+                raise RuntimeError("Не удалось зафиксировать выбранную версию GitHub")
+            if installed_sha() == requested:
+                write_status("success", "complete", "Выбранная версия уже установлена", requested)
                 return
             write_status("running", "verify", "Проверка файлов обновления", requested)
             safe_source(repo)

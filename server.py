@@ -50,12 +50,13 @@ SESSION_TTL = 12 * 3600
 KINDS = {"house", "boiler", "camera", "light", "gate", "sensor", "switch", "other"}
 FAILURES: dict[str, list[float]] = {}
 LOCK = threading.RLock()
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 GITHUB_API = "https://api.github.com/repos/DeadSoulf/MiniHomeServer/commits/main"
 REVISION_FILE = BASE / ".release-commit"
 UPDATE_STATUS = DATA / "update-status.json"
 UPDATE_REQUEST = DATA / "update-request.json"
 UPDATE_UNIT = Path("/etc/systemd/system/minihome-update.path")
+UPDATE_STALE_SECONDS = 600
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SCAN_LOCK = threading.RLock()
 NETWORK_SCAN = {"running": False, "last_error": "", "started_at": None,
@@ -153,11 +154,25 @@ def update_status():
             raise ValueError("Invalid status")
     except (OSError, ValueError):
         data = {"state": "idle", "message": "Проверка обновлений ещё не запускалась"}
+    state = data.get("state", "idle")
+    message = data.get("message", "")
+    if state in ("queued", "running"):
+        try:
+            updated = datetime.fromisoformat(data.get("updated_at", "")).timestamp()
+        except (ValueError, TypeError, OverflowError):
+            try:
+                updated = UPDATE_STATUS.stat().st_mtime
+            except OSError:
+                updated = time.time()
+        if time.time() - updated > UPDATE_STALE_SECONDS:
+            state = "stalled"
+            message = ("Обновление не завершилось вовремя. "
+                       "Можно восстановить очередь и повторить попытку.")
     return {
         "enabled": UPDATE_UNIT.is_file(),
-        "state": data.get("state", "idle"),
+        "state": state,
         "step": data.get("step", ""),
-        "message": data.get("message", ""),
+        "message": message,
         "target_sha": data.get("target_sha", ""),
         "current_sha": installed_sha(),
         "updated_at": data.get("updated_at", ""),
@@ -1123,6 +1138,40 @@ class Handler(BaseHTTPRequestHandler):
             if not launch_zigbee_scan():
                 return self.error(409, "Опрос Zigbee уже выполняется")
             return self.send_bytes(202, {"ok": True, "message": "Опрос Zigbee2MQTT запущен"})
+
+        if method == "POST" and path == "/api/update/recover":
+            if not UPDATE_UNIT.is_file():
+                return self.error(409, "Служба обновлений не установлена")
+            self.body()
+            with LOCK:
+                previous = update_status()
+                if previous["state"] != "stalled":
+                    return self.error(409, "Обновление не зависло или ещё выполняется")
+                systemctl = shutil.which("systemctl") or "/usr/bin/systemctl"
+                try:
+                    result = subprocess.run(
+                        [systemctl, "is-active", "--quiet", "minihome-update.service"],
+                        timeout=4, capture_output=True, check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    return self.error(503, "Не удалось проверить системную службу")
+                if result.returncode == 0:
+                    return self.error(409, "Обновление продолжает выполняться")
+                if result.returncode not in (3, 4):
+                    return self.error(503, "Состояние системной службы не определено")
+                # TimeoutStartSec=300; recovery only after >600 seconds.
+                UPDATE_REQUEST.unlink(missing_ok=True)
+                atomic_json(UPDATE_STATUS, {
+                    "state": "failed",
+                    "step": "recover",
+                    "message": "Зависшая заявка сброшена. Проверьте GitHub и повторите установку.",
+                    "target_sha": previous.get("target_sha", ""),
+                    "current_sha": installed_sha(),
+                    "updated_at": timestamp(),
+                })
+                with database() as db:
+                    add_event(db, "update.recovered", "Зависшая очередь обновлений сброшена")
+            return self.send_bytes(200, {"ok": True})
 
         if method == "POST" and path == "/api/update/install":
             if not UPDATE_UNIT.is_file():

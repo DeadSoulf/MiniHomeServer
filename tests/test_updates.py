@@ -1,6 +1,7 @@
 """Update authorization and integrity tests. No network or privileged commands."""
 import importlib.util
 import json
+from types import SimpleNamespace
 import shutil
 import sqlite3
 import tempfile
@@ -52,6 +53,31 @@ class UpdateAPITests(unittest.TestCase):
         req = Request(self.base + path, method=method, data=body, headers=headers)
         with self.client.open(req, timeout=5) as response:
             return json.load(response), response.status
+
+    def test_recovers_stale_queue_only_when_service_stopped(self):
+        login, _ = self.request("/api/login", "POST", {"password": server.PASSWORD})
+        csrf = login["csrf"]
+        sha = "a" * 40
+        server.atomic_json(server.UPDATE_STATUS, {
+            "state": "queued",
+            "step": "queued",
+            "message": "old request",
+            "target_sha": sha,
+            "updated_at": "2000-01-01T00:00:00+00:00",
+        })
+        server.atomic_json(server.UPDATE_REQUEST, {"sha": sha})
+        with patch.object(server.subprocess, "run", return_value=SimpleNamespace(returncode=0)):
+            with self.assertRaises(HTTPError) as ctx:
+                self.request("/api/update/recover", "POST", {}, csrf)
+            self.assertEqual(ctx.exception.code, 409)
+        self.assertTrue(server.UPDATE_REQUEST.exists())
+        with patch.object(server.subprocess, "run", return_value=SimpleNamespace(returncode=3)):
+            response, code = self.request("/api/update/recover", "POST", {}, csrf)
+            self.assertTrue(response["ok"])
+            self.assertEqual(code, 200)
+        self.assertFalse(server.UPDATE_REQUEST.exists())
+        status, _ = self.request("/api/update/status")
+        self.assertEqual(status["state"], "failed")
 
     def test_pinned_github_update_requires_session_and_csrf(self):
         sha = "a" * 40
