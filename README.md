@@ -11,13 +11,13 @@
 - **События:** журнал действий и изменений карты.
 - **Настройки:** сведения о локальном сервере и подготовка к подключениям.
 - **Backend:** Python без внешних зависимостей, JSON API, SQLite, пароль, ограничение попыток входа, session cookie, CSRF-защита.
-- **Инфраструктура:** Docker Compose или отдельная служба systemd без внешних Python-зависимостей, localhost-only по умолчанию, тесты API и GitHub Actions.
+- **Инфраструктура:** Docker Compose или отдельная служба systemd без внешних Python-зависимостей, привязка к 0.0.0.0:8080 по запросу владельца, тесты API и GitHub Actions.
 
 **Важно:** состояния реального оборудования пока не считываются. Все новые объекты имеют статус «Нет данных», управление исполнительными устройствами не предусмотрено до интеграции.
 
 ## Запуск на Debian
 
-Подробная инструкция для Docker **или минимального Debian без Docker**: [DEPLOY.md](DEPLOY.md). Доступ из любого браузера через Termalin: [ACCESS.md](ACCESS.md). Готовый установщик systemd: [scripts/install-systemd.sh](scripts/install-systemd.sh).
+Подробная инструкция для Docker **или минимального Debian без Docker**: [DEPLOY.md](DEPLOY.md). Доступ по IP или через Termalin: [ACCESS.md](ACCESS.md). Готовый установщик systemd: [scripts/install-systemd.sh](scripts/install-systemd.sh).
 
 ```bash
 git clone https://github.com/DeadSoulf/MiniHomeServer.git
@@ -29,7 +29,9 @@ docker compose up -d --build
 docker compose ps
 ```
 
-После запуска панель слушает `127.0.0.1:8080` на сервере. Можно открыть её через SSH-туннель или защищённый HTTPS reverse proxy. **Не публикуйте административный HTTP напрямую в интернет.**
+После запуска панель привязывается к `0.0.0.0:8080`. В локальной сети откройте `http://10.10.10.61:8080`. Доступ по внешнему IP `91.107.118.226:8080` требует отдельной настройки firewall/NAT. **Для доступа через интернет необходим HTTPS или VPN: HTTP передаёт пароль без шифрования.**
+
+Для уже установленной службы systemd предусмотрена команда: `bash scripts/enable-all-interfaces.sh` от root. См. [ACCESS.md](ACCESS.md).
 
 Выполнить тесты:
 
