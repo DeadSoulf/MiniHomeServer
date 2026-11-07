@@ -743,7 +743,7 @@ def _mqtt_packet(sock):
     return header, _mqtt_exact(sock, count)
 
 
-def _mqtt_inventory(config):
+def _mqtt_inventory(config, wait_seconds=6):
     # Read-only MQTT v3.1.1: CONNECT + SUBSCRIBE. Never publish /set commands.
     host, port = config["host"], config["port"]
     base = config["base_topic"]
@@ -771,8 +771,9 @@ def _mqtt_inventory(config):
         body = b"\x00\x01" + b"".join(_mqtt_string(topic) + b"\x00" for topic in topics)
         conn.sendall(b"\x82" + _mqtt_remaining_length(len(body)) + body)
         devices, availability = None, {}
-        until = time.monotonic() + 6
+        until = time.monotonic() + max(0.2, min(float(wait_seconds), 15))
         while time.monotonic() < until:
+            conn.settimeout(min(1.0, max(0.1, until - time.monotonic())))
             try:
                 header, data = _mqtt_packet(conn)
             except socket.timeout:
