@@ -11,13 +11,13 @@
 - **События:** журнал действий и изменений карты.
 - **Настройки:** сведения о локальном сервере и подготовка к подключениям.
 - **Backend:** Python без внешних зависимостей, JSON API, SQLite, пароль, ограничение попыток входа, session cookie, CSRF-защита.
-- **Инфраструктура:** Docker Compose, контейнер без root, localhost-only по умолчанию, постоянный том, тесты API и GitHub Actions.
+- **Инфраструктура:** Docker Compose или отдельная служба systemd без внешних Python-зависимостей, localhost-only по умолчанию, тесты API и GitHub Actions.
 
 **Важно:** состояния реального оборудования пока не считываются. Все новые объекты имеют статус «Нет данных», управление исполнительными устройствами не предусмотрено до интеграции.
 
 ## Запуск на Debian
 
-Инструкция со всеми предосторожностями: [DEPLOY.md](DEPLOY.md).
+Подробная инструкция для Docker **или минимального Debian без Docker**: [DEPLOY.md](DEPLOY.md). Готовый установщик systemd: [scripts/install-systemd.sh](scripts/install-systemd.sh).
 
 ```bash
 git clone https://github.com/DeadSoulf/MiniHomeServer.git
