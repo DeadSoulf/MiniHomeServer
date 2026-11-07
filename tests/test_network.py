@@ -211,5 +211,28 @@ class NetworkAuthTests(unittest.TestCase):
             self.assertTrue(accepted["ok"])
 
 
+    def test_zigbee_config_requires_csrf_and_hides_password(self):
+        login, _ = self.req("/api/login", "POST", {"password": server.PASSWORD})
+        csrf = login["csrf"]
+        cfg = {"host": "10.10.10.20", "port": 1883, "base_topic": "zigbee2mqtt",
+               "username": "bridge", "password": "only-a-test-password"}
+        with self.assertRaises(HTTPError) as no_csrf:
+            self.req("/api/zigbee/config", "POST", cfg)
+        self.assertEqual(no_csrf.exception.code, 403)
+        scopes = [{"interface": "ens18", "local_ip": "10.10.10.61",
+                   "cidr": "10.10.10.0/24"}]
+        with (patch.object(server, "local_networks", return_value=scopes),
+              patch.object(server, "launch_zigbee_scan", return_value=True),
+              patch.object(server, "launch_network_scan", return_value=False)):
+            response, status = self.req("/api/zigbee/config", "POST", cfg, csrf)
+            self.assertEqual(status, 202)
+            self.assertEqual(response["gateway"]["host"], "10.10.10.20")
+            self.assertNotIn("password", response["gateway"])
+            snapshot, status = self.req("/api/network/devices")
+            self.assertEqual(status, 200)
+            self.assertTrue(snapshot["gateway"]["password_configured"])
+            self.assertNotIn("password", snapshot["gateway"])
+
+
 if __name__ == "__main__":
     unittest.main()
