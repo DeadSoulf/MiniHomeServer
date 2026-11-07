@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import shutil
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -126,6 +127,45 @@ class WorkerIntegrityTests(unittest.TestCase):
         for name in ("server.py", "scripts/update_worker.py"):
             path = REPO / name
             compile(path.read_bytes(), str(path), "exec")
+
+    def test_rollback_restores_code_without_overwriting_data(self):
+        spec = importlib.util.spec_from_file_location("update_worker_rollback",
+                                                       REPO / "scripts" / "update_worker.py")
+        worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(worker)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worker.TARGET = root / "app"
+            worker.TARGET.mkdir()
+            worker.DATA = root / "data"
+            worker.DATA.mkdir()
+            worker.BACKUPS = root / "backups"
+            worker.REVISION = worker.TARGET / ".release-commit"
+            worker.MANIFEST = worker.TARGET / ".release-manifest.json"
+            worker.WORKER = root / "worker.py"
+            worker.REVISION.write_text("b" * 40 + "\\n")
+            for name in worker.FILES:
+                dest = worker.TARGET / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(REPO / name, dest)
+            worker.write_manifest()
+            conn = sqlite3.connect(worker.DATA / "minihome.db")
+            conn.execute("CREATE TABLE example (id INTEGER PRIMARY KEY, value TEXT)")
+            conn.execute("INSERT INTO example(value) VALUES('saved')")
+            conn.commit()
+            conn.close()
+            backup = worker.store_backup()
+            (worker.TARGET / "server.py").write_text("broken code")
+            worker.REVISION.write_text("a" * 40 + "\\n")
+            with patch.object(worker, "run_command", return_value=""):
+                worker.rollback(backup)
+            self.assertEqual((worker.TARGET / "server.py").read_bytes(),
+                             (REPO / "server.py").read_bytes())
+            self.assertEqual(worker.REVISION.read_text().strip(), "b" * 40)
+            conn = sqlite3.connect(worker.DATA / "minihome.db")
+            self.assertEqual(conn.execute("SELECT value FROM example").fetchone()[0], "saved")
+            conn.close()
+
 
 
 if __name__ == "__main__":
