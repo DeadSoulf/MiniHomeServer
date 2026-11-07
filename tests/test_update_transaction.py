@@ -23,6 +23,7 @@ class UpdateTransactionTests(unittest.TestCase):
                   patch.object(worker, 'installed_sha', return_value='b' * 40),
                   patch.object(worker, 'safe_source'),
                   patch.object(worker, 'verify_existing_files'),
+                  patch.object(worker, 'verify_sqlite_permissions'),
                   patch.object(worker, 'store_backup', return_value=Path(tmp)),
                   patch.object(worker, 'deploy_files'),
                   patch.object(worker, 'health', return_value=True),
