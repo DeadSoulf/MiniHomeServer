@@ -87,26 +87,48 @@ install -m 0644 "$repo_root/static/app.js" /opt/minihome/static/app.js
 install -m 0644 "$repo_root/static/style.css" /opt/minihome/static/style.css
 install -m 0755 "$repo_root/scripts/update_worker.py" /usr/local/libexec/minihome-update-worker.py
 
+diagnose_service() {
+  echo "=== Ошибка запуска MiniHomeServer: последние записи systemd ===" >&2
+  systemctl status minihome.service --no-pager --full -l >&2 || true
+  journalctl -u minihome.service -n 35 --no-pager -l >&2 || true
+  echo "=== Текущий сокет веб-панели ===" >&2
+  ss -lnt '( sport = :8080 )' >&2 || true
+}
+
+check_health() {
+  python3 - <<'PY'
+import json, urllib.request
+try:
+    with urllib.request.urlopen("http://127.0.0.1:8080/api/health", timeout=2) as response:
+        ok = json.load(response).get("ok") is True
+except (OSError, ValueError, TimeoutError):
+    ok = False
+raise SystemExit(0 if ok else 1)
+PY
+}
+
 if ! systemctl restart minihome.service; then
+  diagnose_service
   restore_code
   exit 1
 fi
 ok=0
 for attempt in $(seq 1 14); do
-  if python3 - <<'PY'
-import json, urllib.request
-with urllib.request.urlopen("http://127.0.0.1:8080/api/health", timeout=2) as response:
-    assert json.load(response).get("ok") is True
-PY
-  then
+  if check_health; then
     ok=1
     break
   fi
   sleep 1
 done
 if [ "$ok" != "1" ]; then
+  diagnose_service
   restore_code
-  echo "Панель после обновления не отвечает; старая версия восстановлена" >&2
+  if check_health; then
+    echo "Прежняя панель работает; новая версия отклонена." >&2
+  else
+    echo "ВНИМАНИЕ: даже прежняя версия после отката не отвечает." >&2
+    diagnose_service
+  fi
   exit 1
 fi
 
