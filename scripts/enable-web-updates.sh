@@ -30,11 +30,20 @@ if [ "$(git -C "$repo_root" remote get-url origin)" != "$source_url" ]; then
   echo "Неожиданный GitHub-источник. Обновление отменено." >&2
   exit 1
 fi
-if ! git -C "$repo_root" diff --quiet -- server.py static scripts/update_worker.py; then
+if [ "$(git -C "$repo_root" branch --show-current)" != "main" ]; then
+  echo "Для подключения обновлений требуется ветка main." >&2
+  exit 1
+fi
+if ! git -C "$repo_root" diff --quiet HEAD -- server.py static scripts/update_worker.py scripts/systemd scripts/enable-web-updates.sh; then
   echo "В репозитории есть локальные изменения. Сохраните их перед обновлением." >&2
   exit 1
 fi
 commit="$(git -C "$repo_root" rev-parse HEAD)"
+remote_commit="$(git ls-remote "$source_url" refs/heads/main | head -1 | cut -f1)"
+if [ "$commit" != "$remote_commit" ]; then
+  echo "Локальная версия не совпадает с GitHub main. Сначала выполните git pull --ff-only." >&2
+  exit 1
+fi
 if ! [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then
   echo "Не удалось определить точную версию GitHub." >&2
   exit 1
