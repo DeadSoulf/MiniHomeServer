@@ -1,0 +1,24 @@
+[Unit]
+Description=Apply approved MiniHomeServer update from GitHub
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /usr/local/libexec/minihome-update-worker.py
+TimeoutStartSec=300
+RuntimeDirectory=minihome-update
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/opt/minihome /opt/minihome-backups /var/lib/minihome /usr/local/libexec
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
