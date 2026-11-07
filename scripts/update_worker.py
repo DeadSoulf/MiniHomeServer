@@ -89,8 +89,15 @@ def health():
         try:
             with urllib.request.urlopen("http://127.0.0.1:8080/api/health", timeout=2) as resp:
                 info = json.load(resp)
-                if info.get("ok") is True:
-                    return True
+                if info.get("ok") is not True or not isinstance(info.get("version"), str):
+                    raise ValueError("API health-check failed")
+            with urllib.request.urlopen("http://127.0.0.1:8080/", timeout=2) as resp:
+                if b'MiniHomeServer' not in resp.read(16384):
+                    raise ValueError("Missing dashboard HTML")
+            with urllib.request.urlopen("http://127.0.0.1:8080/app.js", timeout=2) as resp:
+                if b'installHandlers' not in resp.read(131072):
+                    raise ValueError("Missing dashboard JavaScript")
+            return True
         except Exception:
             pass
         time.sleep(1)
