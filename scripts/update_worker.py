@@ -203,7 +203,7 @@ def prune_backups():
         shutil.rmtree(path)
 
 
- def perform(requested):
+def perform(requested):
     backup = None
     modified = False
     try:
