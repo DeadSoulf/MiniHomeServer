@@ -1,4 +1,4 @@
-/* MiniHomeServer dashboard v0.2.0 — GitHub updates; no demo device data. */
+/* MiniHomeServer dashboard v0.3.0 — LAN and Zigbee inventory, no demo telemetry. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -22,6 +22,9 @@ const actions = {
   "update.success": "Установлено обновление",
   "update.failed": "Ошибка обновления",
   "update.rollback": "Откат обновления",
+  "network.scan": "Поиск устройств сети",
+  "zigbee.configured": "Шлюз Zigbee настроен",
+  "zigbee.refresh": "Список Zigbee обновлён",
 };
 let csrf = null;
 let state = { devices: [], events: [], map_url: null, integrations: [], version: "—" };
@@ -38,6 +41,9 @@ let updateAvailable = false;
 let updateChecking = false;
 let updateInstalling = false;
 let updateRequestedHere = false;
+let networkInfo = { lan: [], zigbee: [], scan: {}, zigbee_status: {}, gateway: {} };
+let gatewayFormInitialized = false;
+let networkLoading = false;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -111,10 +117,11 @@ function navigate(view) {
   document.querySelectorAll("[data-view]").forEach((node) => {
     node.classList.toggle("active", node.dataset.view === view);
   });
-  const titles = { territory: "Территория", devices: "Оборудование", events: "События", settings: "Настройки" };
+  const titles = { territory: "Территория", devices: "Оборудование", network: "Устройства сети", events: "События", settings: "Настройки" };
   $("breadcrumb-current").textContent = titles[view] || view;
   if (view !== "territory") setPlacing(false);
   if (view === "settings" && csrf) loadUpdateStatus();
+  if (view === "network" && csrf) loadNetworkDevices();
 }
 
 function render() {
@@ -125,6 +132,7 @@ function render() {
   $("stat-unknown").textContent = String(devices.filter((d) => d.state !== "online").length);
   $("stat-integrations").textContent = String(state.integrations.length);
   $("nav-device-count").textContent = String(devices.length);
+  $("nav-network-count").textContent = String(networkInfo.lan.length + networkInfo.zigbee.length);
   $("device-list-total").textContent = devices.length + " объектов";
   $("sidebar-version").textContent = "Версия " + state.version;
   $("settings-version").textContent = state.version;
@@ -496,6 +504,169 @@ async function installUpdate() {
   }
 }
 
+
+function networkTime(raw) {
+  if (!raw) return "Неизвестно";
+  const date = new Date(raw);
+  if (!Number.isFinite(date.getTime())) return "Неизвестно";
+  return date.toLocaleString("ru-RU", {dateStyle:"short",timeStyle:"short"});
+}
+function networkType(kind) {
+  return {
+    "zigbee-gateway": "Zigbee-шлюз", "router": "Маршрутизатор",
+    "camera": "IP-камера", "other": "Сетевое устройство",
+  }[kind] || "Сетевое устройство";
+}
+function addNetworkMarker(name, kind, group) {
+  navigate("territory");
+  openObject(null, {x:0.5, y:0.5});
+  $("object-name").value = String(name).slice(0,80);
+  $("object-zone").value = group;
+  $("object-kind").value = kind;
+  notify("Размести маркер в редакторе карты. Управление устройством пока не подключено.");
+}
+function infoLine(parent, label, value) {
+  const p = el("div","network-meta-line");
+  p.append(el("span","",label), el("strong","",value || "Неизвестно"));
+  parent.append(p);
+}
+function networkDeviceCard(item) {
+  const row = el("div","network-device");
+  const glyph = el("span","device-glyph",item.kind === "camera" ? "◉"
+    : item.kind === "zigbee-gateway" ? "⬡" : item.kind === "router" ? "⇄" : "⌁");
+  const desc = el("div","network-device-detail");
+  desc.append(el("strong","",item.hostname || item.ip));
+  const meta = el("div","network-meta");
+  infoLine(meta,"IP",item.ip);
+  infoLine(meta,"MAC",item.mac || "Не определён");
+  infoLine(meta,"Тип",networkType(item.kind));
+  if (item.vendor) infoLine(meta,"Обнаружено по SSDP",item.vendor);
+  infoLine(meta,"Последний поиск",networkTime(item.last_seen));
+  desc.append(meta);
+  const actions = el("div","network-device-actions");
+  actions.append(el("span","device-status "+(item.online ? "good" : "unknown"),
+    item.online ? "Обнаружено" : "Не подтверждено"));
+  actions.append(button("На карту","btn secondary small",
+    ()=>addNetworkMarker(item.hostname || item.ip, item.kind==="camera" ? "camera" : "other","Локальная сеть")));
+  row.append(glyph,desc,actions);
+  return row;
+}
+function zigbeeDeviceCard(item) {
+  const row = el("div","network-device");
+  const glyph = el("span","device-glyph",item.type==="Coordinator" ? "⬡" : "◈");
+  const desc = el("div","network-device-detail");
+  desc.append(el("strong","",item.name));
+  const meta = el("div","network-meta");
+  infoLine(meta,"IEEE",item.ieee);
+  infoLine(meta,"Тип",item.type);
+  infoLine(meta,"Модель",item.model || "Не указана шлюзом");
+  if (item.vendor) infoLine(meta,"Производитель",item.vendor);
+  infoLine(meta,"Шлюз",item.bridge_ip);
+  desc.append(meta);
+  const actions = el("div","network-device-actions");
+  const state = item.availability==="online"?"На связи":
+    item.availability==="offline"?"Офлайн":"Нет данных";
+  const klass = item.availability==="online"?"good":
+    item.availability==="offline"?"bad":"unknown";
+  actions.append(el("span","device-status "+klass,state));
+  actions.append(button("На карту","btn secondary small",
+    ()=>addNetworkMarker(item.name, item.type==="Coordinator" ? "other" : "sensor","Zigbee")));
+  row.append(glyph,desc,actions);
+  return row;
+}
+function renderNetworkDevices() {
+  const lan = networkInfo.lan || [], zigbee = networkInfo.zigbee || [];
+  const scan = networkInfo.scan || {}, z = networkInfo.zigbee_status || {};
+  const gateway = networkInfo.gateway || {};
+  $("network-total").textContent = String(lan.length);
+  $("network-online").textContent = String(lan.filter(d=>d.online).length);
+  $("zigbee-total").textContent = String(zigbee.length);
+  $("nav-network-count").textContent = String(lan.length+zigbee.length);
+  $("network-scan-btn").disabled = !!scan.running;
+  $("network-scan-btn").textContent = scan.running ? "Идёт сканирование…" : "↻ Сканировать сеть";
+  $("network-scan-state").textContent = scan.running ? "Поиск…" :
+    scan.last_error ? "Ошибка поиска" : networkInfo.last_scan ? "Готово" : "Не сканировалось";
+  $("network-scan-state").className = "update-badge"+(scan.last_error ? " update-alert" : "");
+  $("network-subnets").textContent = scan.last_error ? scan.last_error :
+    (scan.subnets && scan.subnets.length ? "Подсети: "+scan.subnets.join(", ")+" · последний поиск: "+networkTime(networkInfo.last_scan)
+      : "Подсеть будет определена Debian при первом сканировании.");
+  const list = $("lan-devices-list");
+  list.replaceChildren();
+  if (lan.length) for (const device of lan) list.append(networkDeviceCard(device));
+  else list.append(el("div","small-empty",scan.running ? "Ищем устройства…" :
+    "Устройства пока не найдены. Нажмите «Сканировать сеть»."));
+  const zlist = $("zigbee-devices-list");
+  zlist.replaceChildren();
+  if (zigbee.length) for (const device of zigbee) zlist.append(zigbeeDeviceCard(device));
+  else zlist.append(el("div","small-empty",z.running ? "Читаем Zigbee2MQTT…" :
+    "Список Zigbee пуст. Настройте подключение к MQTT-брокеру."));
+  $("zigbee-refresh-btn").disabled = !!z.running || !gateway.configured;
+  $("zigbee-refresh-btn").textContent = z.running ? "Опрос…" : "↻ Обновить Zigbee";
+  $("zigbee-connection-state").textContent = z.running ? "Подключаемся к MQTT-брокеру…" :
+    z.last_error ? "Ошибка шлюза: "+z.last_error :
+    z.connected ? "Zigbee2MQTT отвечает · "+gateway.host+" · получено устройств: "+z.found :
+    gateway.configured ? "Шлюз настроен: "+gateway.host+". Нажмите «Обновить Zigbee»." :
+    "Укажите IP MQTT-брокера Zigbee2MQTT и нажмите «Сохранить и найти устройства».";
+  if (!gatewayFormInitialized && gateway.configured) {
+    $("zigbee-host").value = gateway.host || "";
+    $("zigbee-port").value = gateway.port || 1883;
+    $("zigbee-topic").value = gateway.base_topic || "zigbee2mqtt";
+    $("zigbee-username").value = gateway.username || "";
+    $("zigbee-secret-hint").textContent = gateway.password_configured
+      ? "Пароль сохранён на сервере; оставь поле пустым, чтобы не менять."
+      : "Не отправляй пароль в чат.";
+    gatewayFormInitialized = true;
+  }
+}
+async function loadNetworkDevices() {
+  if (!csrf || networkLoading) return;
+  networkLoading = true;
+  try {
+    networkInfo = await api("/api/network/devices");
+    renderNetworkDevices();
+  } catch (error) {
+    if (csrf && currentView==="network") notify(error.message,true);
+  } finally { networkLoading = false; }
+}
+async function scanNetwork() {
+  $("network-scan-btn").disabled = true;
+  try {
+    await api("/api/network/scan","POST",{});
+    notify("Поиск в локальной сети начат");
+    setTimeout(loadNetworkDevices,1200);
+  } catch (error) { notify(error.message,true); }
+  finally { setTimeout(loadNetworkDevices,900); }
+}
+async function updateZigbee() {
+  try {
+    await api("/api/zigbee/refresh","POST",{});
+    notify("Читаем список устройств Zigbee2MQTT");
+    setTimeout(loadNetworkDevices,1500);
+  } catch (error) { notify(error.message,true); }
+}
+async function saveZigbeeGateway(event) {
+  event.preventDefault();
+  const save = $("zigbee-save-btn"), error = $("zigbee-form-error");
+  error.textContent = "";
+  save.disabled = true;
+  const data = {
+    host:$("zigbee-host").value.trim(),
+    port:Number($("zigbee-port").value),
+    base_topic:$("zigbee-topic").value.trim(),
+    username:$("zigbee-username").value.trim(),
+  };
+  if ($("zigbee-password").value) data.password = $("zigbee-password").value;
+  try {
+    await api("/api/zigbee/config","POST",data);
+    $("zigbee-password").value = "";
+    gatewayFormInitialized = false;
+    notify("Настройки сохранены. Запущен опрос Zigbee2MQTT.");
+    setTimeout(loadNetworkDevices,1000);
+  } catch (err) {
+    error.textContent = err.message;
+  } finally { save.disabled = false; }
+}
+
 function installHandlers() {
   $("login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -510,6 +681,9 @@ function installHandlers() {
       await refresh();
     } catch (err) { error.textContent = err.message; }
   });
+  $("network-scan-btn").addEventListener("click", scanNetwork);
+  $("zigbee-refresh-btn").addEventListener("click", updateZigbee);
+  $("zigbee-form").addEventListener("submit", saveZigbeeGateway);
   $("update-check").addEventListener("click", checkForUpdate);
   $("update-install").addEventListener("click", installUpdate);
   $("logout-btn").addEventListener("click", async () => {
@@ -574,6 +748,9 @@ function installHandlers() {
   };
   updateClock();
   setInterval(updateClock, 15000);
+  setInterval(() => {
+    if (csrf && currentView === "network") loadNetworkDevices();
+  }, 5500);
   setInterval(() => {
     if (csrf && currentView === "settings") loadUpdateStatus();
   }, 3000);
