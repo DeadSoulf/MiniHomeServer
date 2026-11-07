@@ -2,6 +2,8 @@
 import json
 import os
 import socket
+import struct
+import time
 import stat
 import sys
 import tempfile
@@ -95,6 +97,56 @@ class NetworkInventoryTests(unittest.TestCase):
         self.assertEqual(sensor["availability"], "online")
         self.assertEqual(coordinator["availability"], "unknown")
         self.assertEqual(sensor["bridge_ip"], "10.10.10.20")
+
+    def test_zigbee2mqtt_retained_inventory(self):
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        errors = []
+
+        def broker():
+            try:
+                with listener:
+                    connection, _ = listener.accept()
+                    with connection:
+                        connection.settimeout(4)
+                        kind, _ = server._mqtt_packet(connection)
+                        self.assertEqual(kind, 0x10)
+                        connection.sendall(b"\x20\x02\x00\x00")
+                        kind, _ = server._mqtt_packet(connection)
+                        self.assertEqual(kind, 0x82)
+                        connection.sendall(b"\x90\x05\x00\x01\x00\x00\x00")
+
+                        def retained(topic, content):
+                            raw_topic = topic.encode("utf-8")
+                            message = json.dumps(content, ensure_ascii=False).encode("utf-8")
+                            payload = struct.pack("!H", len(raw_topic)) + raw_topic + message
+                            connection.sendall(b"\x31" + server._mqtt_remaining_length(len(payload)) + payload)
+
+                        retained("zigbee2mqtt/bridge/devices", [{
+                            "ieee_address": "0x00158d00018255df",
+                            "type": "EndDevice", "friendly_name": "Датчик",
+                            "definition": {"model": "WXKG01LM", "vendor": "Example"}
+                        }])
+                        retained("zigbee2mqtt/Датчик/availability", {"state": "online"})
+                        time.sleep(1)
+            except Exception as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=broker, daemon=True)
+        thread.start()
+        try:
+            devices, availability = server._mqtt_inventory({
+                "host": "127.0.0.1", "port": port, "base_topic": "zigbee2mqtt",
+                "username": "", "password": "",
+            }, wait_seconds=0.7)
+        finally:
+            thread.join(timeout=4)
+            listener.close()
+        self.assertFalse(errors, str(errors))
+        self.assertEqual(devices[0]["friendly_name"], "Датчик")
+        self.assertEqual(availability["Датчик"], "online")
 
     def test_mqtt_read_packet_and_utf8(self):
         left, right = socket.socketpair()
