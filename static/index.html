@@ -37,6 +37,7 @@
       <nav class="navigation" aria-label="Главное меню">
         <button class="nav-item active" type="button" data-view="territory"><span class="nav-icon">▧</span> Территория</button>
         <button class="nav-item" type="button" data-view="devices"><span class="nav-icon">◫</span> Оборудование <span id="nav-device-count" class="nav-count">0</span></button>
+        <button class="nav-item" type="button" data-view="network"><span class="nav-icon">⇄</span> Устройства сети <span id="nav-network-count" class="nav-count">0</span></button>
         <button class="nav-item" type="button" data-view="events"><span class="nav-icon">◷</span> События</button>
       </nav>
       <div class="nav-label section-sep">СИСТЕМА</div>
@@ -125,6 +126,69 @@
           <article class="panel-card devices-panel">
             <div class="table-heading"><h2>Все объекты</h2><span class="small-muted" id="device-list-total"></span></div>
             <div id="devices-list" class="devices-list"></div>
+          </article>
+        </section>
+
+        <section class="view" id="view-network">
+          <div class="page-heading">
+            <div>
+              <div class="eyebrow accent">ИНТЕГРАЦИИ / ПОИСК</div>
+              <h1>Устройства сети</h1>
+              <p class="page-subtitle">Оборудование, обнаруженное MiniHomeServer в локальной IPv4-сети, и Zigbee через шлюз.</p>
+            </div>
+            <button class="btn primary" type="button" id="network-scan-btn">↻ Сканировать сеть</button>
+          </div>
+          <div class="network-stat-grid">
+            <div class="stat-card"><div class="stat-top">Устройства LAN <span class="stat-symbol">⇄</span></div><strong id="network-total">0</strong><small>Обнаружено на сервере</small></div>
+            <div class="stat-card"><div class="stat-top">Сейчас обнаруживаются <span class="stat-symbol">◉</span></div><strong id="network-online">0</strong><small>Ответили на последний поиск</small></div>
+            <div class="stat-card"><div class="stat-top">Устройства Zigbee <span class="stat-symbol">⬡</span></div><strong id="zigbee-total">0</strong><small>Через Zigbee2MQTT</small></div>
+          </div>
+          <article class="panel-card network-panel">
+            <div class="panel-title">
+              <div><h2>Локальная сеть</h2><p class="settings-description" id="network-subnets">Определяем доступные подсети…</p></div>
+              <span id="network-scan-state" class="update-badge">Ожидает поиска</span>
+            </div>
+            <div class="network-notice">Поиск выполняется только с Debian в непосредственно подключённых частных IPv4-подсетях (до /24), без перебора паролей или отправки управляющих команд. Устройства в других VLAN и некоторые спящие устройства могут быть не видны.</div>
+            <div id="lan-devices-list" class="network-list"><div class="small-empty">Пока нет результатов сканирования.</div></div>
+          </article>
+          <article class="panel-card network-panel">
+            <div class="panel-title">
+              <div><h2>Устройства Zigbee</h2><p class="settings-description">Опрос через MQTT-топик Zigbee2MQTT bridge/devices. У Zigbee-датчиков нет собственного IP-адреса.</p></div>
+              <button class="btn secondary" type="button" id="zigbee-refresh-btn">↻ Обновить Zigbee</button>
+            </div>
+            <div id="zigbee-connection-state" class="network-notice">Шлюз пока не настроен.</div>
+            <div id="zigbee-devices-list" class="network-list"><div class="small-empty">Данные Zigbee ещё не получены.</div></div>
+          </article>
+          <article class="panel-card network-panel">
+            <div class="panel-title"><div><h2>Подключить шлюз Zigbee2MQTT</h2><p class="settings-description">Только чтение списка устройств. MiniHomeServer не отправляет команды включения, выключения или сопряжения.</p></div></div>
+            <form id="zigbee-form" class="gateway-form" autocomplete="off">
+              <div>
+                <label class="field-label" for="zigbee-host">IPv4-адрес MQTT-брокера</label>
+                <input id="zigbee-host" type="text" placeholder="Например, 10.10.10.20" required maxlength="15" inputmode="decimal">
+              </div>
+              <div>
+                <label class="field-label" for="zigbee-port">MQTT-порт</label>
+                <input id="zigbee-port" type="number" min="1" max="65535" value="1883" required>
+              </div>
+              <div>
+                <label class="field-label" for="zigbee-topic">Базовый топик</label>
+                <input id="zigbee-topic" type="text" value="zigbee2mqtt" maxlength="50" required>
+              </div>
+              <div>
+                <label class="field-label" for="zigbee-username">MQTT-пользователь</label>
+                <input id="zigbee-username" type="text" maxlength="128" placeholder="Необязательно">
+              </div>
+              <div class="gateway-password">
+                <label class="field-label" for="zigbee-password">MQTT-пароль</label>
+                <input id="zigbee-password" type="password" maxlength="256" placeholder="Оставьте пустым, чтобы сохранить прежний">
+                <small id="zigbee-secret-hint" class="small-muted">Не отправляйте пароль в чат.</small>
+              </div>
+              <div class="gateway-actions">
+                <button class="btn primary" type="submit" id="zigbee-save-btn">Сохранить и найти устройства</button>
+                <span id="zigbee-form-error" class="form-error" role="alert"></span>
+              </div>
+            </form>
+            <div class="network-notice">Если у тебя шлюз Tuya, Aqara, Sonoff, Philips Hue, ZHA или другой, он не обязательно использует Zigbee2MQTT. Для чтения дочерних устройств нужен поддерживаемый протокол конкретного шлюза — сообщи модель, и добавим адаптер. Внешний доступ к панели и MQTT-паролю следует защищать HTTPS/VPN.</div>
           </article>
         </section>
 
