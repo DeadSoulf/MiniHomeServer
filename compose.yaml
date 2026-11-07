@@ -1,0 +1,25 @@
+services:
+  minihome:
+    build: .
+    container_name: minihome
+    restart: unless-stopped
+    ports:
+      # Safe default: accessible via SSH tunnel or an existing reverse proxy.
+      - "${MINIHOME_BIND_ADDRESS:-127.0.0.1}:${MINIHOME_PORT:-8080}:8080"
+    environment:
+      MINIHOME_ADMIN_PASSWORD: ${MINIHOME_ADMIN_PASSWORD:?Set_MINIHOME_ADMIN_PASSWORD_in_a_private_.env}
+      MINIHOME_DATA_DIR: /app/data
+      MINIHOME_HOST: 0.0.0.0
+      MINIHOME_PORT: "8080"
+      MINIHOME_COOKIE_SECURE: ${MINIHOME_COOKIE_SECURE:-0}
+    volumes:
+      - minihome_data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  minihome_data:
