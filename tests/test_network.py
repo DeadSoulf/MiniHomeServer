@@ -1,4 +1,8 @@
-"""MiniHomeServer LAN/Zigbee inventory tests: no external hosts are contacted."""
+"""MiniHomeServer LAN/Zigbee inventory tests: no external hosts are contacted.
+
+All addresses used below are fictitious private LAN test fixtures and do not
+correspond to the owner's actual home network.
+"""
 import json
 import os
 import socket
@@ -33,7 +37,7 @@ class NetworkInventoryTests(unittest.TestCase):
     def test_interfaces_accept_only_direct_private_subnets(self):
         rows = [
             {"ifname": "ens18", "addr_info": [
-                {"family": "inet", "scope": "global", "local": "10.10.10.61", "prefixlen": 24}]},
+                {"family": "inet", "scope": "global", "local": "192.168.50.61", "prefixlen": 24}]},
             {"ifname": "docker0", "addr_info": [
                 {"family": "inet", "scope": "global", "local": "172.17.0.1", "prefixlen": 24}]},
             {"ifname": "ens19", "addr_info": [
@@ -42,34 +46,34 @@ class NetworkInventoryTests(unittest.TestCase):
         with patch.object(server, "_ip_json", return_value=rows):
             scopes = server.local_networks()
         self.assertEqual(scopes, [{
-            "interface": "ens18", "local_ip": "10.10.10.61", "cidr": "10.10.10.0/24"
+            "interface": "ens18", "local_ip": "192.168.50.61", "cidr": "192.168.50.0/24"
         }])
 
     def test_bounded_scan_stores_only_devices_seen_by_server(self):
-        scopes = [{"interface": "ens18", "local_ip": "10.10.10.61", "cidr": "10.10.10.60/30"}]
-        neighbor = {"10.10.10.62": "aa:bb:cc:dd:ee:ff"}
+        scopes = [{"interface": "ens18", "local_ip": "192.168.50.61", "cidr": "192.168.50.60/30"}]
+        neighbor = {"192.168.50.62": "aa:bb:cc:dd:ee:ff"}
         with (patch.object(server, "local_networks", return_value=scopes),
               patch.object(server, "neighbor_cache", return_value=neighbor),
               patch.object(server, "_tcp_arp_probe", return_value=True),
               patch.object(server, "_ssdp_devices", return_value={}),
-              patch.object(server, "_mdns_devices", return_value={"10.10.10.62": {
+              patch.object(server, "_mdns_devices", return_value={"192.168.50.62": {
                   "hostname": "zigbee-gateway", "vendor": "", "kind": "other"}})):
             result = server._scan_lan()
         self.assertEqual(result["found"], 1)
         summary = server.network_snapshot()
         self.assertEqual(len(summary["lan"]), 1)
         device = summary["lan"][0]
-        self.assertEqual(device["ip"], "10.10.10.62")
+        self.assertEqual(device["ip"], "192.168.50.62")
         self.assertEqual(device["mac"], "aa:bb:cc:dd:ee:ff")
         self.assertEqual(device["hostname"], "zigbee-gateway")
         self.assertEqual(device["online"], 1)
         self.assertEqual(summary["last_scan"] is not None, True)
 
     def test_gateway_configuration_never_leaks_password(self):
-        scopes = [{"interface": "ens18", "local_ip": "10.10.10.61", "cidr": "10.10.10.0/24"}]
+        scopes = [{"interface": "ens18", "local_ip": "192.168.50.61", "cidr": "192.168.50.0/24"}]
         with patch.object(server, "local_networks", return_value=scopes):
             response = server.set_gateway_settings({
-                "host": "10.10.10.20", "port": 1883, "base_topic": "zigbee2mqtt",
+                "host": "192.168.50.20", "port": 1883, "base_topic": "zigbee2mqtt",
                 "username": "bridgeuser", "password": "example-only-not-real",
             })
         self.assertTrue(response["configured"])
@@ -78,7 +82,7 @@ class NetworkInventoryTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(server.GATEWAY_CONFIG.stat().st_mode), 0o600)
         with patch.object(server, "local_networks", return_value=scopes):
             with self.assertRaisesRegex(ValueError, "подсет"):
-                server.set_gateway_settings({"host": "10.10.20.2"})
+                server.set_gateway_settings({"host": "192.168.51.2"})
             with self.assertRaises(ValueError):
                 server.set_gateway_settings({"host": "8.8.8.8"})
 
@@ -89,14 +93,14 @@ class NetworkInventoryTests(unittest.TestCase):
             {"ieee_address": "0x00124b00120144ae", "friendly_name": "Coordinator",
              "type": "Coordinator", "definition": None},
         ]
-        count = server._store_zigbee_devices(items, {"Датчик кухни": "online"}, "10.10.10.20")
+        count = server._store_zigbee_devices(items, {"Датчик кухни": "online"}, "192.168.50.20")
         self.assertEqual(count, 2)
         rows = server.network_snapshot()["zigbee"]
         sensor = next(item for item in rows if item["name"] == "Датчик кухни")
         coordinator = next(item for item in rows if item["type"] == "Coordinator")
         self.assertEqual(sensor["availability"], "online")
         self.assertEqual(coordinator["availability"], "unknown")
-        self.assertEqual(sensor["bridge_ip"], "10.10.10.20")
+        self.assertEqual(sensor["bridge_ip"], "192.168.50.20")
 
     def test_zigbee2mqtt_retained_inventory(self):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -214,19 +218,19 @@ class NetworkAuthTests(unittest.TestCase):
     def test_zigbee_config_requires_csrf_and_hides_password(self):
         login, _ = self.req("/api/login", "POST", {"password": server.PASSWORD})
         csrf = login["csrf"]
-        cfg = {"host": "10.10.10.20", "port": 1883, "base_topic": "zigbee2mqtt",
+        cfg = {"host": "192.168.50.20", "port": 1883, "base_topic": "zigbee2mqtt",
                "username": "bridge", "password": "only-a-test-password"}
         with self.assertRaises(HTTPError) as no_csrf:
             self.req("/api/zigbee/config", "POST", cfg)
         self.assertEqual(no_csrf.exception.code, 403)
-        scopes = [{"interface": "ens18", "local_ip": "10.10.10.61",
-                   "cidr": "10.10.10.0/24"}]
+        scopes = [{"interface": "ens18", "local_ip": "192.168.50.61",
+                   "cidr": "192.168.50.0/24"}]
         with (patch.object(server, "local_networks", return_value=scopes),
               patch.object(server, "launch_zigbee_scan", return_value=True),
               patch.object(server, "launch_network_scan", return_value=False)):
             response, status = self.req("/api/zigbee/config", "POST", cfg, csrf)
             self.assertEqual(status, 202)
-            self.assertEqual(response["gateway"]["host"], "10.10.10.20")
+            self.assertEqual(response["gateway"]["host"], "192.168.50.20")
             self.assertNotIn("password", response["gateway"])
             snapshot, status = self.req("/api/network/devices")
             self.assertEqual(status, 200)
