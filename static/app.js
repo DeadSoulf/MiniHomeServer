@@ -1,4 +1,4 @@
-/* MiniHomeServer dashboard v0.1.0 — no demo data, no device commands. */
+/* MiniHomeServer dashboard v0.2.0 — GitHub updates; no demo device data. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
