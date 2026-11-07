@@ -974,6 +974,16 @@ class Handler(BaseHTTPRequestHandler):
             if self.require():
                 return self.send_bytes(200, snapshot())
             return
+        if path == "/api/network/devices":
+            if not self.require():
+                return
+            return self.send_bytes(200, network_snapshot(automatic=True))
+        if path == "/api/network/status":
+            if not self.require():
+                return
+            with SCAN_LOCK:
+                info = {"scan": dict(NETWORK_SCAN), "zigbee": dict(ZIGBEE_SCAN)}
+            return self.send_bytes(200, info)
         if path == "/api/update/status":
             if not self.require():
                 return
@@ -1076,6 +1086,27 @@ class Handler(BaseHTTPRequestHandler):
             if SECURE_COOKIE:
                 expired += "; Secure"
             return self.send_bytes(200, {"ok": True}, cookie=expired)
+
+        if method == "POST" and path == "/api/network/scan":
+            if not launch_network_scan():
+                return self.error(409, "Сканирование уже идёт или выполнялось менее 30 секунд назад")
+            return self.send_bytes(202, {"ok": True, "message": "Поиск устройств в LAN запущен"})
+
+        if method == "POST" and path == "/api/zigbee/config":
+            data = self.body()
+            config = set_gateway_settings(data)
+            with database() as db:
+                add_event(db, "zigbee.configured", "Настроен шлюз Zigbee2MQTT")
+            if not launch_zigbee_scan():
+                return self.error(409, "Опрос Zigbee уже выполняется")
+            return self.send_bytes(202, {"ok": True, "gateway": config})
+
+        if method == "POST" and path == "/api/zigbee/refresh":
+            if not gateway_settings().get("host"):
+                return self.error(409, "Шлюз Zigbee2MQTT пока не настроен")
+            if not launch_zigbee_scan():
+                return self.error(409, "Опрос Zigbee уже выполняется")
+            return self.send_bytes(202, {"ok": True, "message": "Опрос Zigbee2MQTT запущен"})
 
         if method == "POST" and path == "/api/update/install":
             if not UPDATE_UNIT.is_file():
