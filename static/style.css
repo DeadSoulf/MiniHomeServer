@@ -337,3 +337,61 @@ input::placeholder { color:#60788e; }
   .update-versions { grid-template-columns:1fr; }
   .update-toolbar .btn { flex:1 1 auto; }
 }
+
+
+/* Network discovery and Zigbee gateway */
+.network-stat-grid {
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:15px;margin-bottom:20px;
+}
+.network-panel{margin-top:20px;}
+.network-panel .panel-title {align-items:flex-start;margin-bottom:18px;}
+.network-panel .settings-description{margin:7px 0 0;}
+.network-notice {
+  border:1px solid #354557;background:#192737;color:#a8b9c9;
+  border-radius:9px;padding:13px 15px;font-size:12px;line-height:1.7;
+  margin:0 0 18px;
+}
+.network-list {display:grid;min-height:65px;}
+.network-device {
+  display:flex;align-items:flex-start;gap:14px;border-top:1px solid var(--border);
+  padding:18px 0;
+}
+.network-device:first-child{border-top:0;}
+.network-device-detail{flex:1;min-width:0;}
+.network-device-detail>strong{font-size:13px;display:block;margin:3px 0 11px;overflow-wrap:anywhere;}
+.network-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 24px;}
+.network-meta-line{min-width:0;font-size:11px;line-height:1.45;}
+.network-meta-line span{display:block;color:#8195a9;margin-bottom:2px;}
+.network-meta-line strong{color:#cbd9e4;font-weight:550;overflow-wrap:anywhere;}
+.network-device-actions{
+  display:flex;align-items:flex-end;flex-direction:column;gap:12px;
+  flex-shrink:0;
+}
+.gateway-form{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 18px;
+  align-items:end;margin-bottom:22px;
+}
+.gateway-form>div{min-width:0;}
+.gateway-form .field-label{margin-top:4px;}
+.gateway-password{grid-column:span 2;}
+.gateway-password small{display:block;margin-top:7px;font-size:11px;line-height:1.5;}
+.gateway-actions{grid-column:1/-1;display:flex;align-items:center;gap:13px;flex-wrap:wrap;}
+.gateway-actions .form-error{margin:0;}
+@media(max-width:1100px) {
+  .gateway-form{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .network-meta{grid-template-columns:1fr;}
+  .network-device{flex-wrap:wrap;}
+  .network-device-actions{flex-direction:row;width:100%;align-items:center;justify-content:flex-end;}
+}
+@media(max-width:780px) {
+  .network-stat-grid{gap:9px;}
+  .network-device-actions{justify-content:flex-start;}
+}
+@media(max-width:520px) {
+  .network-stat-grid{grid-template-columns:1fr;}
+  .gateway-form{grid-template-columns:1fr;}
+  .gateway-password{grid-column:auto;}
+  .network-panel .panel-title{flex-wrap:wrap;}
+  .network-device .device-glyph{width:33px;height:33px;}
+}
