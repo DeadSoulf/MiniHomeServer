@@ -158,6 +158,25 @@
               <p class="settings-description">Доступ защищён паролем и сессией. Управление физическими устройствами в этой версии отключено. Для доступа из интернета необходим HTTPS и безопасный шлюз.</p>
               <div class="integration-coming">● Режим без управляющих команд</div>
             </article>
+            <article class="panel-card updates-card" id="updates-card">
+              <div class="update-heading">
+                <div>
+                  <h2>Обновления MiniHomeServer</h2>
+                  <p class="settings-description">Источник: GitHub · DeadSoulf/MiniHomeServer · ветка main. Установка только вручную.</p>
+                </div>
+                <span class="update-badge" id="update-badge">Проверка статуса</span>
+              </div>
+              <div class="update-versions">
+                <div><span>Установленная версия</span><code id="update-current">—</code></div>
+                <div><span>Последняя версия GitHub</span><code id="update-latest">Не проверялась</code></div>
+              </div>
+              <p id="update-message" class="update-message" role="status" aria-live="polite">Загружаем состояние обновлений…</p>
+              <div class="update-toolbar">
+                <button type="button" class="btn secondary" id="update-check">Проверить GitHub</button>
+                <button type="button" class="btn primary" id="update-install" disabled>Установить обновление</button>
+              </div>
+              <div class="update-note">Перед установкой сохраняется копия предыдущего кода и базы данных. Если новая версия не запустится, выполняется откат. Для удалённого доступа используйте HTTPS или VPN.</div>
+            </article>
           </div>
         </section>
       </main>
