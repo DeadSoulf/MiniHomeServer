@@ -28,7 +28,7 @@ WORKER = Path("/usr/local/libexec/minihome-update-worker.py")
 BACKUPS = Path("/opt/minihome-backups")
 REQUEST = DATA / "update-request.json"
 STATUS = DATA / "update-status.json"
-LOCKFILE = Path("/run/lock/minihome-update.lock")
+LOCKFILE = Path("/run/minihome-update/lock")
 REVISION = TARGET / ".release-commit"
 FILES = (
     "server.py",
