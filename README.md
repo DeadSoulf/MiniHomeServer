@@ -17,7 +17,7 @@
 
 ## Запуск на Debian
 
-Подробная инструкция для Docker **или минимального Debian без Docker**: [DEPLOY.md](DEPLOY.md). Готовый установщик systemd: [scripts/install-systemd.sh](scripts/install-systemd.sh).
+Подробная инструкция для Docker **или минимального Debian без Docker**: [DEPLOY.md](DEPLOY.md). Доступ из любого браузера через Termalin: [ACCESS.md](ACCESS.md). Готовый установщик systemd: [scripts/install-systemd.sh](scripts/install-systemd.sh).
 
 ```bash
 git clone https://github.com/DeadSoulf/MiniHomeServer.git
