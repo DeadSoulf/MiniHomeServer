@@ -14,13 +14,13 @@ jobs:
         with:
           python-version: "3.13"
       - name: Python syntax
-        run: python -m py_compile server.py
+        run: python -m py_compile server.py scripts/update_worker.py
       - name: API integration tests
         run: python -m unittest discover -s tests -v
       - name: JavaScript syntax
         run: node --check static/app.js
       - name: Systemd installer shell syntax
-        run: bash -n scripts/install-systemd.sh scripts/enable-all-interfaces.sh
+        run: bash -n scripts/install-systemd.sh scripts/enable-all-interfaces.sh scripts/enable-web-updates.sh
       - name: Compose validation
         env:
           MINIHOME_ADMIN_PASSWORD: temporary-ci-validation-only
