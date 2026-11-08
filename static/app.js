@@ -1,4 +1,4 @@
-/* MiniHomeServer dashboard v0.3.6 — GitHub web update smoke test. */
+/* MiniHomeServer dashboard v0.3.7 — camera coverage and release labels. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -31,6 +31,7 @@ let csrf = null;
 let state = { devices: [], events: [], map_url: null, integrations: [], version: "—" };
 let editing = false;
 let placing = false;
+let placementKind = "house";
 let dragging = null;
 let currentView = "territory";
 let lastMapUrl = null;
@@ -38,6 +39,7 @@ let toastTimer = null;
 let busy = false;
 let updateInfo = null;
 let updateLatest = null;
+let updateLatestVersion = null;
 let updateAvailable = false;
 let updateChecking = false;
 let updateInstalling = false;
@@ -166,6 +168,7 @@ function renderMap() {
       image.onload = () => {
         if (image.naturalWidth && image.naturalHeight)
           stage.style.aspectRatio = image.naturalWidth + " / " + image.naturalHeight;
+        renderCameraCoverage();
       };
       image.src = state.map_url;
     } else {
@@ -180,10 +183,11 @@ function renderMap() {
   $("edit-map-btn").classList.toggle("selected", editing);
   $("edit-map-btn").setAttribute("aria-pressed", String(editing));
   $("map-mode-label").textContent = placing
-    ? "Нажмите на точку карты, чтобы разместить объект"
+    ? (placementKind === "camera" ? "Выберите место установки камеры" : "Нажмите на точку карты, чтобы разместить объект")
     : editing
       ? "Перетаскивайте значки по карте — расположение сохранится"
       : "Нажмите «Редактировать», чтобы перемещать объекты";
+  renderCameraCoverage();
   if (dragging) return;
   const layer = $("map-markers");
   layer.replaceChildren();
@@ -193,7 +197,10 @@ function renderMap() {
     node.style.left = (d.x * 100) + "%";
     node.style.top = (d.y * 100) + "%";
     node.dataset.id = d.id;
-    node.title = d.name + " · " + statusText(d);
+    if (d.kind === "camera") node.classList.add("map-marker-camera");
+    node.title = d.name + (d.kind === "camera"
+      ? " · обзор " + d.camera_fov + "° · направление " + d.camera_direction + "°"
+      : "") + " · " + statusText(d);
     node.setAttribute("aria-label", node.title);
     node.classList.add("marker-" + statusClass(d));
     node.append(el("span", "marker-symbol", (kinds[d.kind] || kinds.other).icon));
@@ -208,11 +215,65 @@ function renderMap() {
   }
 }
 
+// Angles are clockwise from the top of the map (0° up, 90° right).
+function cameraSectorPath(cx, cy, radius, fov, direction) {
+  if (fov >= 360) return "";
+  const point = (degrees) => {
+    const radians = degrees * Math.PI / 180;
+    return [cx + radius * Math.sin(radians), cy - radius * Math.cos(radians)];
+  };
+  const start = point(direction - fov / 2);
+  const end = point(direction + fov / 2);
+  return "M " + cx + " " + cy + " L " + start[0] + " " + start[1]
+    + " A " + radius + " " + radius + " 0 " + (fov > 180 ? 1 : 0)
+    + " 1 " + end[0] + " " + end[1] + " Z";
+}
+
+// SVG pixel coordinates keep view cones circular on rectangular site plans.
+function renderCameraCoverage(preview = null) {
+  const layer = $("map-camera-coverage");
+  if (!layer) return;
+  const bounds = $("map-stage").getBoundingClientRect();
+  const w = bounds.width, h = bounds.height;
+  if (!w || !h) return;
+  layer.setAttribute("viewBox", "0 0 " + w + " " + h);
+  layer.replaceChildren();
+  const ns = "http://www.w3.org/2000/svg";
+  for (const d of state.devices) {
+    if (d.kind !== "camera") continue;
+    const p = preview && preview.id === d.id ? preview : d;
+    const x = p.x * w, y = p.y * h;
+    const radius = Math.min(w, h) * Number(d.camera_reach ?? 25) / 100;
+    const fov = Number(d.camera_fov ?? 90);
+    const direction = Number(d.camera_direction ?? 0);
+    const sector = document.createElementNS(ns, fov >= 360 ? "circle" : "path");
+    sector.classList.add("map-camera-sector");
+    if (fov >= 360) {
+      sector.setAttribute("cx", x);
+      sector.setAttribute("cy", y);
+      sector.setAttribute("r", radius);
+    } else {
+      sector.setAttribute("d", cameraSectorPath(x, y, radius, fov, direction));
+    }
+    layer.append(sector);
+    if (fov < 360) {
+      const axis = document.createElementNS(ns, "line");
+      const theta = direction * Math.PI / 180;
+      axis.setAttribute("x1", x);
+      axis.setAttribute("y1", y);
+      axis.setAttribute("x2", x + radius * Math.sin(theta));
+      axis.setAttribute("y2", y - radius * Math.cos(theta));
+      axis.classList.add("map-camera-centerline");
+      layer.append(axis);
+    }
+  }
+}
+
 function setPlacing(value) {
   placing = Boolean(value);
   $("map-stage").classList.toggle("placing", placing);
   $("map-mode-label").textContent = placing
-    ? "Нажмите место на карте для нового объекта"
+    ? (placementKind === "camera" ? "Нажмите место установки камеры" : "Нажмите место на карте для нового объекта")
     : editing ? "Перемещайте значки по карте" : "Нажмите «Редактировать», чтобы перемещать объекты";
 }
 function mapPosition(event) {
@@ -234,6 +295,7 @@ function startDrag(event, d, node) {
     const pos = mapPosition(ev);
     node.style.left = (pos.x * 100) + "%";
     node.style.top = (pos.y * 100) + "%";
+    if (d.kind === "camera") renderCameraCoverage({ id: d.id, ...pos });
     if (Math.hypot(ev.clientX - dragging.startX, ev.clientY - dragging.startY) > 5)
       dragging.moved = true;
   };
@@ -271,12 +333,16 @@ function startDrag(event, d, node) {
   node.addEventListener("pointercancel", cancel);
 }
 
-function openObject(d = null, position = null) {
+function openObject(d = null, position = null, preferredKind = "house") {
   $("object-form").reset();
   $("object-error").textContent = "";
   $("object-id").value = d ? d.id : "";
   $("object-name").value = d ? d.name : "";
-  $("object-kind").value = d ? d.kind : "house";
+  $("object-kind").value = d ? d.kind : preferredKind;
+  $("camera-fov").value = String(d?.camera_fov ?? 90);
+  $("camera-direction").value = String(d?.camera_direction ?? 0);
+  $("camera-reach").value = String(d?.camera_reach ?? 25);
+  syncCameraFields();
   $("object-zone").value = d ? d.zone : "";
   const x = position ? position.x : d ? d.x : 0.5;
   const y = position ? position.y : d ? d.y : 0.5;
@@ -289,12 +355,35 @@ function openObject(d = null, position = null) {
   $("object-name").focus();
 }
 
+function syncCameraFields() {
+  $("camera-fields").hidden = $("object-kind").value !== "camera";
+  $("camera-fov-value").textContent = $("camera-fov").value + "°";
+  $("camera-direction-value").textContent = $("camera-direction").value + "°";
+  $("camera-reach-value").textContent = $("camera-reach").value + "%";
+}
+
+function startMapPlacement(kind = "house") {
+  navigate("territory");
+  placementKind = kind;
+  if (state.map_url) {
+    setPlacing(true);
+    renderMap();
+    notify(kind === "camera"
+      ? "Нажмите на карте место установки камеры"
+      : "Нажмите на карте место для нового объекта");
+  } else {
+    openObject(null, null, kind);
+  }
+}
+
 function deviceRow(d, compact = false) {
   const node = el("div", compact ? "summary-row" : "device-row");
   const glyph = el("span", "device-glyph", (kinds[d.kind] || kinds.other).icon);
   const content = el("div", "device-info");
   content.append(el("strong", "", d.name));
-  content.append(el("small", "", (d.zone || (kinds[d.kind] || kinds.other).label) + " · " + statusText(d)));
+  content.append(el("small", "", (d.zone || (kinds[d.kind] || kinds.other).label)
+    + (d.kind === "camera" ? " · обзор " + d.camera_fov + "° / " + d.camera_direction + "°" : "")
+    + " · " + statusText(d)));
   node.append(glyph, content);
   if (!compact) {
     const status = el("span", "device-status " + statusClass(d), statusText(d));
@@ -415,6 +504,11 @@ async function uploadMap(file) {
 }
 
 
+function releaseLabel(version, sha) {
+  const caption = typeof version === "string" && /^\d+(?:\.\d+){2}$/.test(version)
+    ? "v" + version : "Версия неизвестна";
+  return caption + " · " + shortCommit(sha);
+}
 function shortCommit(sha) {
   return typeof sha === "string" && /^[a-f0-9]{40}$/.test(sha)
     ? sha.substring(0, 12) : "Неизвестна";
@@ -435,8 +529,10 @@ function showUpdateStatus() {
   badge.textContent = updateInfo.enabled ? (phaseLabels[stage] || "Готово") : "Не настроено";
   badge.className = "update-badge" + (stage === "failed" || stage === "rolled_back" ? " update-alert"
     : stage === "success" ? " update-ok" : "");
-  $("update-current").textContent = shortCommit(updateInfo.current_sha);
-  $("update-latest").textContent = updateLatest ? shortCommit(updateLatest) : "Не проверялась";
+  $("update-current").textContent = releaseLabel(
+    updateInfo.current_version || state.version, updateInfo.current_sha);
+  $("update-latest").textContent = updateLatest
+    ? releaseLabel(updateLatestVersion, updateLatest) : "Не проверялась";
   if (!updateInfo.enabled) {
     $("update-message").textContent = "Обновления ещё не активированы на Debian. Один раз выполните scripts/enable-web-updates.sh (инструкция в GitHub).";
   } else {
@@ -482,6 +578,7 @@ async function checkForUpdate() {
   try {
     const data = await api("/api/update/check");
     updateLatest = data.latest_sha;
+    updateLatestVersion = data.latest_version || null;
     updateAvailable = !!data.update_available;
     if (updateInfo) {
       updateInfo.message = updateAvailable
@@ -499,7 +596,7 @@ async function checkForUpdate() {
 }
 async function installUpdate() {
   if (!updateInfo || !updateInfo.enabled || !updateAvailable || !updateLatest || updateInstalling) return;
-  const nextVersion = shortCommit(updateLatest);
+  const nextVersion = releaseLabel(updateLatestVersion, updateLatest);
   if (!confirm("Установить обновление " + nextVersion + " из GitHub?\n\nMiniHomeServer ненадолго перезапустится. Карта и настройки сохранятся. При ошибке будет предпринята попытка отката.")) return;
   updateInstalling = true;
   showUpdateStatus();
@@ -535,6 +632,7 @@ async function recoverStalledUpdate() {
     updateRequestedHere = false;
     updateAvailable = false;
     updateLatest = null;
+    updateLatestVersion = null;
     await loadUpdateStatus();
     notify("Очередь восстановлена. Нажмите «Проверить GitHub».");
   } catch (error) {
@@ -563,6 +661,7 @@ function addNetworkMarker(name, kind, group) {
   $("object-name").value = String(name).slice(0,80);
   $("object-zone").value = group;
   $("object-kind").value = kind;
+  syncCameraFields();
   notify("Размести маркер в редакторе карты. Управление устройством пока не подключено.");
 }
 function infoLine(parent, label, value) {
@@ -738,23 +837,22 @@ function installHandlers() {
   document.querySelectorAll("[data-go]").forEach((node) => {
     node.addEventListener("click", () => navigate(node.dataset.go));
   });
+  $("map-add-camera-btn").addEventListener("click", () => startMapPlacement("camera"));
+  $("object-kind").addEventListener("change", syncCameraFields);
+  $("camera-fov").addEventListener("input", syncCameraFields);
+  $("camera-direction").addEventListener("input", syncCameraFields);
+  $("camera-reach").addEventListener("input", syncCameraFields);
+  window.addEventListener("resize", () => renderCameraCoverage());
   $("edit-map-btn").addEventListener("click", () => {
     editing = !editing;
     setPlacing(false);
     renderMap();
   });
-  $("add-object-btn").addEventListener("click", () => {
-    navigate("territory");
-    if (state.map_url) {
-      setPlacing(true);
-      renderMap();
-      notify("Нажмите на место на карте для нового объекта");
-    } else openObject();
-  });
+  $("add-object-btn").addEventListener("click", () => startMapPlacement("house"));
   $("devices-add-btn").addEventListener("click", () => openObject());
   $("map-stage").addEventListener("click", (e) => {
     if (!placing || e.target.closest(".map-marker")) return;
-    openObject(null, mapPosition(e));
+    openObject(null, mapPosition(e), placementKind);
   });
   $("map-file").addEventListener("change", (e) => uploadMap(e.target.files[0]));
   $("dialog-close").addEventListener("click", () => $("object-dialog").close());
@@ -769,6 +867,11 @@ function installHandlers() {
       x: Number($("object-x").value),
       y: Number($("object-y").value),
     };
+    if (data.kind === "camera") {
+      data.camera_fov = Number($("camera-fov").value);
+      data.camera_direction = Number($("camera-direction").value);
+      data.camera_reach = Number($("camera-reach").value);
+    }
     const save = $("dialog-save");
     save.disabled = true;
     $("object-error").textContent = "";

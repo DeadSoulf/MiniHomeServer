@@ -135,6 +135,9 @@ h2 { font-size:16px; margin:0; letter-spacing:-.35px; font-weight:650; }
   background:rgba(36,77,88,.3); color:#7ac9c4; font-size:40px; }
 .map-empty strong { display:block; font-size:18px; }
 .map-empty p { color:#9bb0c0; line-height:1.65; margin:12px 0 20px; }
+.map-camera-coverage { position:absolute; inset:0; width:100%; height:100%; z-index:3; pointer-events:none; overflow:hidden; }
+.map-camera-sector { fill:rgba(40,198,181,.15); stroke:rgba(77,223,204,.8); stroke-width:1.4; vector-effect:non-scaling-stroke; }
+.map-camera-centerline { fill:none; stroke:rgba(105,243,222,.55); stroke-width:1; stroke-dasharray:5 5; vector-effect:non-scaling-stroke; }
 .map-markers { position:absolute; inset:0; z-index:4; pointer-events:none; }
 .map-marker {
   pointer-events:auto; position:absolute; display:flex; flex-direction:column;
@@ -154,6 +157,8 @@ h2 { font-size:16px; margin:0; letter-spacing:-.35px; font-weight:650; }
 }
 .marker-good .marker-symbol { border-color:var(--accent); }
 .marker-bad .marker-symbol { border-color:var(--danger); }
+.map-marker-camera .marker-symbol { border-radius:50%; border-color:var(--accent); }
+.legend-camera-sector { display:inline-block; width:16px; height:10px; border:1px solid rgba(77,223,204,.8); background:rgba(40,198,181,.15); transform:skew(-15deg); }
 .map-marker:hover .marker-symbol,.map-marker:focus-visible .marker-symbol,.map-marker.focused .marker-symbol {
   border-color:var(--accent); color:var(--accent);
 }
@@ -245,6 +250,14 @@ input::placeholder { color:#60788e; }
 .dialog-head h2 { font-size:22px; margin-top:8px; }
 .icon-close { font-size:25px; line-height:1; background:none; border:0; color:#98b1c5; padding:0 6px; }
 .form-body { padding:0 29px 20px; }
+.camera-fields { margin-top:20px; padding:14px 16px 16px; border:1px solid #30605d; background:rgba(28,83,81,.13); border-radius:10px; }
+.camera-fields[hidden] { display:none; }
+.camera-controls-heading { font-size:12px; font-weight:700; color:#85dfd2; }
+.camera-fields .field-label { margin-top:15px; }
+.camera-fields input[type="range"] { display:block; width:100%; padding:0; accent-color:var(--accent); cursor:pointer; }
+.camera-hint { font-size:11px; color:#9ab0c1; line-height:1.55; margin-top:7px; }
+.camera-fields output { font-variant-numeric:tabular-nums; color:#9befdd; }
+.update-versions code { overflow-wrap:anywhere; }
 .coord-note { padding:14px; color:#a2b6c8; background:#182638; border:1px solid var(--border2); border-radius:8px; margin-top:20px; font-size:11px; }
 .dialog-actions { border-top:1px solid var(--border); padding:17px 29px; display:flex; justify-content:flex-end; gap:10px; }
 .toast {
