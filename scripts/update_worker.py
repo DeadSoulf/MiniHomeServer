@@ -190,10 +190,12 @@ def restore_sqlite_sidecar_ownership():
     sidecars = [DATA / "minihome.db-wal", DATA / "minihome.db-shm"]
     if not any(path.exists() or path.is_symlink() for path in sidecars):
         return
-    account = pwd.getpwnam("minihome")
+    # Reject unsafe paths before looking up the platform-specific account.
     for path in sidecars:
         if path.is_symlink():
             raise RuntimeError("Недопустимая ссылка SQLite: " + path.name)
+    account = pwd.getpwnam("minihome")
+    for path in sidecars:
         try:
             details = path.stat()
         except FileNotFoundError:
