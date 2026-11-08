@@ -18,6 +18,7 @@ import binascii
 import hmac
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -50,7 +51,7 @@ SESSION_TTL = 12 * 3600
 KINDS = {"house", "building", "boiler", "camera", "light", "gate", "sensor", "switch", "other"}
 FAILURES: dict[str, list[float]] = {}
 LOCK = threading.RLock()
-VERSION = "0.3.8"
+VERSION = "0.3.9"
 GITHUB_API = "https://api.github.com/repos/DeadSoulf/MiniHomeServer/commits/main"
 REVISION_FILE = BASE / ".release-commit"
 UPDATE_STATUS = DATA / "update-status.json"
@@ -260,6 +261,38 @@ def setting(db, key: str, default: str = "") -> str:
     return row["value"] if row else default
 
 
+def map_scale(db):
+    """Stored image extents in metres; unset until the owner calibrates them."""
+    try:
+        width = float(setting(db, "map_width_m"))
+        height = float(setting(db, "map_height_m"))
+    except ValueError:
+        return None
+    if not (math.isfinite(width) and math.isfinite(height)
+            and 1 <= width <= 5000 and 1 <= height <= 5000):
+        return None
+    return {"width_m": width, "height_m": height}
+
+
+def map_dimension(data, key):
+    value = data.get(key)
+    if type(value) not in (float, int) or not math.isfinite(value):
+        raise ValueError(key + ": укажите число метров")
+    if not 1 <= value <= 5000:
+        raise ValueError(key + ": допустимое значение от 1 до 5000 м")
+    return round(float(value), 2)
+
+
+def percent_field(data, key, default):
+    """Decimal percentages allow metre-level building sizes without rounding."""
+    value = data.get(key, default)
+    if type(value) not in (float, int) or not math.isfinite(value):
+        raise ValueError(key + ": укажите процент числом")
+    if not 0.1 <= value <= 65:
+        raise ValueError(key + ": допустимый размер 0.1–65% плана")
+    return round(float(value), 4)
+
+
 def snapshot() -> dict:
     with database() as db:
         devices = [dict(row) for row in db.execute(
@@ -272,6 +305,7 @@ def snapshot() -> dict:
             "SELECT id,at,action,detail FROM events ORDER BY id DESC LIMIT 60"
         )]
         stamp = setting(db, "map_updated")
+        scale = map_scale(db)
     with SCAN_LOCK:
         zigbee_connected = bool(ZIGBEE_SCAN["connected"])
     return {
@@ -279,6 +313,7 @@ def snapshot() -> dict:
         "devices": devices,
         "events": events,
         "map_url": f"/media/territory?v={stamp}" if stamp else None,
+        "map_scale": scale,
         "integrations": ([{"name": "Zigbee2MQTT", "connected": True}]
                          if zigbee_connected else []),
     }
@@ -335,8 +370,8 @@ def device_values(data, current=None):
             shape = int(shape)
         elif type(shape) is not int or shape not in (0, 1):
             raise ValueError("building_shape: ожидается да/нет")
-        width = integer_field(data, "building_width", base.get("building_width", 15), 3, 65)
-        height = integer_field(data, "building_height", base.get("building_height", 12), 3, 65)
+        width = percent_field(data, "building_width", base.get("building_width", 15))
+        height = percent_field(data, "building_height", base.get("building_height", 12))
         rotation = integer_field(data, "building_rotation",
                                  base.get("building_rotation", 0), 0, 359)
     else:
@@ -1355,6 +1390,29 @@ class Handler(BaseHTTPRequestHandler):
                 with database() as db:
                     add_event(db, "update.queued", f"Заказано обновление {requested[:12]}")
             return self.send_bytes(202, {"ok": True, "sha": requested})
+
+        if method == "POST" and path == "/api/map/scale":
+            data = self.body()
+            if not isinstance(data, dict):
+                raise ValueError("Ожидается объект JSON")
+            if data == {"clear": True}:
+                with database() as db:
+                    db.execute("DELETE FROM settings WHERE key IN ('map_width_m','map_height_m')")
+                    add_event(db, "map.scale", "Сброшены размеры плана в метрах")
+                return self.send_bytes(200, {"ok": True, "map_scale": None})
+            if set(data) != {"width_m", "height_m"}:
+                raise ValueError("Необходимо указать ширину и высоту плана")
+            width_m = map_dimension(data, "width_m")
+            height_m = map_dimension(data, "height_m")
+            with database() as db:
+                db.execute("INSERT OR REPLACE INTO settings(key,value)"
+                           " VALUES('map_width_m',?)", (str(width_m),))
+                db.execute("INSERT OR REPLACE INTO settings(key,value)"
+                           " VALUES('map_height_m',?)", (str(height_m),))
+                add_event(db, "map.scale", "Размеры плана заданы в метрах")
+            return self.send_bytes(200, {
+                "ok": True, "map_scale": {"width_m": width_m, "height_m": height_m}
+            })
 
         if method == "POST" and path == "/api/map":
             data = self.body()

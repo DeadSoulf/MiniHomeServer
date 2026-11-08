@@ -102,8 +102,8 @@ class BuildingApiTests(unittest.TestCase):
     def test_reject_invalid_dimensions_and_shape_without_creating_records(self):
         invalid=[
             ("building_shape","yes"),("building_shape",2),
-            ("building_width",2),("building_width",66),("building_width",True),
-            ("building_height",0),("building_height",66),("building_height",10.5),
+            ("building_width",0),("building_width",66),("building_width",True),
+            ("building_height",0),("building_height",66),("building_height","10.5"),
             ("building_rotation",-1),("building_rotation",360),
             ("building_rotation","0"),
         ]
