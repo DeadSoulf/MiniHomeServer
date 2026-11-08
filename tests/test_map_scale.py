@@ -109,6 +109,7 @@ class MapScaleAPITests(unittest.TestCase):
             {"clear": True, "width_m": 30},
             {"width_m": float("nan"), "height_m": 40},
             {"width_m": float("inf"), "height_m": 40},
+            {"width_m": 10 ** 800, "height_m": 40},
         ]
         for payload in bad:
             with self.subTest(payload=payload):

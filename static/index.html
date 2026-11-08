@@ -291,15 +291,15 @@
           <div id="building-dimensions" hidden>
             <div id="building-percent-fields">
               <label class="field-label" for="building-width">Ширина: <output id="building-width-value" for="building-width">15%</output></label>
-              <input id="building-width" type="range" min="3" max="65" value="15">
+              <input id="building-width" type="range" min="0.1" max="65" step="any" value="15">
               <label class="field-label" for="building-height">Длина: <output id="building-height-value" for="building-height">12%</output></label>
-              <input id="building-height" type="range" min="3" max="65" value="12">
+              <input id="building-height" type="range" min="0.1" max="65" step="any" value="12">
             </div>
             <div id="building-meter-fields" hidden>
               <label class="field-label" for="building-width-m">Ширина строения, м</label>
-              <input id="building-width-m" type="number" min="0.01" step="any" inputmode="decimal" placeholder="Например, 9">
+              <input id="building-width-m" type="number" min="0.001" step="any" inputmode="decimal" placeholder="Например, 9">
               <label class="field-label" for="building-height-m">Длина строения, м</label>
-              <input id="building-height-m" type="number" min="0.01" step="any" inputmode="decimal" placeholder="Например, 6">
+              <input id="building-height-m" type="number" min="0.001" step="any" inputmode="decimal" placeholder="Например, 6">
             </div>
             <label class="field-label" for="building-rotation">Поворот: <output id="building-rotation-value" for="building-rotation">0°</output></label>
             <input id="building-rotation" type="range" min="0" max="359" value="0">

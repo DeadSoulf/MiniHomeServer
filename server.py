@@ -276,9 +276,9 @@ def map_scale(db):
 
 def map_dimension(data, key):
     value = data.get(key)
-    if type(value) not in (float, int) or not math.isfinite(value):
+    if type(value) not in (float, int):
         raise ValueError(key + ": укажите число метров")
-    if not 1 <= value <= 5000:
+    if not 1 <= value <= 5000 or not math.isfinite(value):
         raise ValueError(key + ": допустимое значение от 1 до 5000 м")
     return round(float(value), 2)
 
@@ -286,9 +286,9 @@ def map_dimension(data, key):
 def percent_field(data, key, default):
     """Decimal percentages allow metre-level building sizes without rounding."""
     value = data.get(key, default)
-    if type(value) not in (float, int) or not math.isfinite(value):
+    if type(value) not in (float, int):
         raise ValueError(key + ": укажите процент числом")
-    if not 0.1 <= value <= 65:
+    if not 0.1 <= value <= 65 or not math.isfinite(value):
         raise ValueError(key + ": допустимый размер 0.1–65% плана")
     return round(float(value), 4)
 
