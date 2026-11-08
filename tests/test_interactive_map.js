@@ -35,7 +35,8 @@ function makeHarness() {
   elements.set("map-stage",stage);
   for(const id of ["map-zoom-in","map-zoom-out","map-zoom-reset","map-zoom-label",
                    "map-image","map-empty","map-camera-coverage","map-buildings",
-                   "map-markers","edit-map-btn","map-mode-label"])elements.set(id,node());
+                   "map-markers","edit-map-btn","map-mode-label",
+                   "map-scale-status","map-scale-summary"])elements.set(id,node());
   const doc={
     getElementById(id){return elements.get(id)||null;},
     createElement:node,
