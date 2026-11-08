@@ -109,7 +109,7 @@ h2 { font-size:16px; margin:0; letter-spacing:-.35px; font-weight:650; }
 .card-header p { margin:7px 0 0; color:var(--muted); font-size:12px; line-height:1.5; max-width:660px; }
 .toolbar { display:flex; gap:8px; }
 .map-viewport {
-  position:relative; width:100%; min-height:320px; max-height:690px;
+  position:relative; width:100%; height:auto;
   aspect-ratio:16/10; overflow:hidden; touch-action:none; cursor:grab;
   background:#0c1622; border-top:1px solid var(--border); border-bottom:1px solid var(--border);
 }
@@ -340,7 +340,7 @@ input::placeholder { color:#60788e; }
   .page-heading { align-items:flex-start; }
   .page-heading>.btn { align-self:center; }
   .bottom-grid,.settings-grid { grid-template-columns:1fr; }
-  .map-viewport { min-height:290px; }
+  .map-viewport { min-height:0; }
   .card-header,.panel-card { padding:18px; }
   .map-footer { padding:13px 16px; }
   .device-row { flex-wrap:wrap; }
@@ -357,7 +357,7 @@ input::placeholder { color:#60788e; }
   .toolbar .btn { flex:1; }
   .map-footer { display:block; }
   .map-tip { display:block; text-align:left; margin-top:10px; max-width:100%; }
-  .map-viewport { min-height:280px; }
+  .map-viewport { min-height:0; }
   .map-zoom-controls {top:8px; right:8px; padding:4px;}
   .map-zoom-button {width:29px; height:29px;}
   .map-zoom-reset {width:auto;}
