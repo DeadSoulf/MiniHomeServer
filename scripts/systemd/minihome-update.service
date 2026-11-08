@@ -20,8 +20,10 @@ ProtectKernelTunables=yes
 ProtectKernelModules=yes
 # The application data directory is owned 0700 by minihome; the updater
 # needs DAC override to read its request and back up SQLite without weakening
-# the application's private-directory permissions.
-CapabilityBoundingSet=CAP_DAC_OVERRIDE
+# the application's private-directory permissions. The backup may create
+# root-owned WAL/SHM sidecars; CAP_CHOWN allows restoring their fixed paths
+# to the application's uid before its next SQLite connection.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_CHOWN
 AmbientCapabilities=
 ReadWritePaths=/opt/minihome /opt/minihome-backups /var/lib/minihome /usr/local/libexec
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

@@ -12,7 +12,9 @@ import fcntl
 import hashlib
 import json
 import os
+import pwd
 import re
+import stat
 import shutil
 import sqlite3
 import subprocess
@@ -177,6 +179,39 @@ def verify_sqlite_permissions():
             )
 
 
+def restore_sqlite_sidecar_ownership():
+    """Repair only SQLite's fixed WAL/SHM files after a root-run backup.
+
+    Read-only SQLite connections may create a new -shm file owned by root.
+    The web service runs as minihome with a private 0700 data directory, so
+    it cannot open root-owned files. Do not chown the whole data directory or
+    any user configuration, map or other arbitrary path.
+    """
+    sidecars = [DATA / "minihome.db-wal", DATA / "minihome.db-shm"]
+    if not any(path.exists() or path.is_symlink() for path in sidecars):
+        return
+    account = pwd.getpwnam("minihome")
+    for path in sidecars:
+        if path.is_symlink():
+            raise RuntimeError("Недопустимая ссылка SQLite: " + path.name)
+        try:
+            details = path.stat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(details.st_mode):
+            raise RuntimeError("Недопустимый файл SQLite: " + path.name)
+        if details.st_uid == account.pw_uid:
+            continue
+        if details.st_uid != 0:
+            raise RuntimeError(
+                "Неожиданный владелец SQLite: " + path.name
+            )
+        # The updater unit permits CAP_CHOWN only for this narrowly scoped
+        # repair, and ReadWritePaths is limited to MiniHomeServer paths.
+        os.chown(path, account.pw_uid, account.pw_gid)
+        os.chmod(path, 0o600)
+
+
 def store_backup():
     BACKUPS.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(BACKUPS, 0o700)
@@ -207,6 +242,7 @@ def store_backup():
         finally:
             source.close()
             destination.close()
+            restore_sqlite_sidecar_ownership()
     return path
 
 
@@ -281,6 +317,7 @@ def perform(requested):
             verify_sqlite_permissions()
             write_status("running", "backup", "Сохранение предыдущей версии и копии базы данных", requested)
             backup = store_backup()
+            verify_sqlite_permissions()
             write_status("running", "install", "Установка новой версии", requested)
             modified = True
             deploy_files(repo)

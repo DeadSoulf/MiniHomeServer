@@ -149,6 +149,40 @@ class WorkerIntegrityTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Локальные изменения"):
                 worker.verify_existing_files()
 
+    def test_sidecar_helper_rejects_symlinks_without_changes(self):
+        spec = importlib.util.spec_from_file_location("minihome_sidecars",
+                                                       REPO / "scripts" / "update_worker.py")
+        worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(worker)
+        with tempfile.TemporaryDirectory() as tmp:
+            original_data = worker.DATA
+            try:
+                worker.DATA = Path(tmp)
+                target = Path(tmp) / "unrelated"
+                target.write_text("keep", encoding="utf-8")
+                (Path(tmp) / "minihome.db-shm").symlink_to(target)
+                with self.assertRaisesRegex(RuntimeError, "ссылка SQLite"):
+                    worker.restore_sqlite_sidecar_ownership()
+                self.assertEqual(target.read_text(encoding="utf-8"), "keep")
+            finally:
+                worker.DATA = original_data
+
+    def test_sidecar_helper_does_not_touch_other_files(self):
+        spec = importlib.util.spec_from_file_location("minihome_sidecars_files",
+                                                       REPO / "scripts" / "update_worker.py")
+        worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(worker)
+        with tempfile.TemporaryDirectory() as tmp:
+            original_data = worker.DATA
+            try:
+                worker.DATA = Path(tmp)
+                protected = Path(tmp) / "territory"
+                protected.write_bytes(b"original map")
+                worker.restore_sqlite_sidecar_ownership()
+                self.assertEqual(protected.read_bytes(), b"original map")
+            finally:
+                worker.DATA = original_data
+
     def test_updater_source_python_compiles(self):
         for name in ("server.py", "scripts/update_worker.py"):
             path = REPO / name

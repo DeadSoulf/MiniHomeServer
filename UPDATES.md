@@ -45,6 +45,12 @@ systemctl status minihome minihome-update.path minihome-update.service --no-page
 journalctl -u minihome-update.service -n 40 --no-pager
 ```
 
+### Восстановление владельца WAL и SHM
+
+Если в журнале Debian была ошибка `sqlite3.OperationalError: unable to open database file`, проверьте владельцев файлов `minihome.db`, `minihome.db-wal` и `minihome.db-shm` в штатном каталоге данных MiniHomeServer. Они должны быть доступны пользователю `minihome`.
+
+Системный обновитель после резервного копирования теперь исправляет владельца только собственных WAL и SHM, если их создал root. Не выполняйте `chown -R` на всём сервере и не удаляйте файл SQLite для восстановления.
+
 ## Диагностика
 
 ~~~bash
