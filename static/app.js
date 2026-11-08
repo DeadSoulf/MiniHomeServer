@@ -1,4 +1,4 @@
-/* MiniHomeServer dashboard v0.3.5 — LAN discovery with iproute2 array states and netlink fallback. */
+/* MiniHomeServer dashboard v0.3.6 — GitHub web update smoke test. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
