@@ -1,4 +1,4 @@
-/* MiniHomeServer dashboard v0.3.8 — interactive territory, buildings and cameras. */
+/* MiniHomeServer dashboard v0.3.9 — calibrated plan and metric building sizes. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -29,7 +29,7 @@ const actions = {
   "zigbee.refresh": "Список Zigbee обновлён",
 };
 let csrf = null;
-let state = { devices: [], events: [], map_url: null, integrations: [], version: "—" };
+let state = { devices: [], events: [], map_url: null, map_scale: null, integrations: [], version: "—" };
 let editing = false;
 let placing = false;
 let placementKind = "house";
@@ -200,6 +200,14 @@ function renderMap() {
   stage.classList.toggle("placing", placing);
   $("edit-map-btn").classList.toggle("selected", editing);
   $("edit-map-btn").setAttribute("aria-pressed", String(editing));
+  $("map-scale-status").textContent = state.map_scale
+    ? "План: " + formatMeters(state.map_scale.width_m) + " × "
+      + formatMeters(state.map_scale.height_m) + " м"
+    : "Размеры плана не указаны";
+  $("map-scale-summary").textContent = state.map_scale
+    ? "Размеры плана: " + formatMeters(state.map_scale.width_m) + " × "
+      + formatMeters(state.map_scale.height_m) + " м"
+    : "Размеры плана в метрах пока не заданы.";
   $("map-mode-label").textContent = placing
     ? "Нажмите точку плана для размещения: " + (placementKind === "building" ? "строение" : placementKind === "camera" ? "камера" : "объект")
     : editing
@@ -219,8 +227,8 @@ function renderMap() {
     node.style.height = d.building_height + "%";
     node.style.setProperty("--building-angle", d.building_rotation + "deg");
     node.dataset.id = d.id;
-    node.title = d.name + " · " + d.building_width + "% × " + d.building_height
-      + "% · поворот " + d.building_rotation + "°";
+    node.title = d.name + " · " + buildingDimensionLabel(d)
+      + " · поворот " + d.building_rotation + "°";
     node.setAttribute("aria-label", node.title);
     node.append(el("span", "map-building-label", d.name));
     node.addEventListener("click", (ev) => {
@@ -546,6 +554,82 @@ function startDrag(event, d, node) {
   node.addEventListener("pointercancel", cancel);
 }
 
+function formatMeters(value) {
+  return Number(value).toLocaleString("ru-RU", {maximumFractionDigits: 2});
+}
+function metersToPercent(meters, planDimension) {
+  if (!Number.isFinite(meters) || !Number.isFinite(planDimension) || planDimension <= 0)
+    return NaN;
+  return Math.round(meters * 1000000 / planDimension) / 10000;
+}
+function percentToMeters(percent, planDimension) {
+  return Number((percent * planDimension / 100).toFixed(4));
+}
+function buildingDimensionLabel(d) {
+  const scale = state.map_scale;
+  if (scale) return formatMeters(percentToMeters(d.building_width, scale.width_m))
+    + " × " + formatMeters(percentToMeters(d.building_height, scale.height_m)) + " м";
+  return d.building_width + " × " + d.building_height + "%";
+}
+function updatePositionLabel(x, y) {
+  const scale = state.map_scale;
+  $("object-coords").textContent = scale
+    ? "Положение на плане: " + formatMeters(x * scale.width_m) + " м слева, "
+      + formatMeters(y * scale.height_m) + " м сверху"
+    : "Положение на карте: " + Math.round(x * 100) + "% / " + Math.round(y * 100) + "%";
+}
+
+function openMapScaleEditor() {
+  const scale = state.map_scale;
+  $("map-width-m").value = scale ? String(scale.width_m) : "";
+  $("map-height-m").value = scale ? String(scale.height_m) : "";
+  $("map-scale-clear").hidden = !scale;
+  $("map-scale-error").textContent = "";
+  $("map-scale-dialog").showModal();
+  $("map-width-m").focus();
+}
+
+async function saveMapScale(event) {
+  event.preventDefault();
+  const width_m = Number($("map-width-m").value);
+  const height_m = Number($("map-height-m").value);
+  const button = $("map-scale-save");
+  $("map-scale-error").textContent = "";
+  if (!Number.isFinite(width_m) || !Number.isFinite(height_m)
+      || width_m < 1 || height_m < 1 || width_m > 5000 || height_m > 5000)
+  {
+    $("map-scale-error").textContent = "Укажите ширину и длину от 1 до 5000 м.";
+    return;
+  }
+  button.disabled = true;
+  try {
+    await api("/api/map/scale", "POST", {width_m,height_m});
+    $("map-scale-dialog").close();
+    await refresh();
+    notify("Размеры плана сохранены");
+  } catch(error) {
+    $("map-scale-error").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+async function clearMapScale() {
+  if (!confirm("Сбросить размеры плана? Координаты и контуры строений останутся без изменений.")) return;
+  const button = $("map-scale-clear");
+  button.disabled = true;
+  $("map-scale-error").textContent = "";
+  try {
+    await api("/api/map/scale", "POST", {clear:true});
+    $("map-scale-dialog").close();
+    await refresh();
+    notify("Размеры плана сброшены. Строения снова измеряются в процентах.");
+  } catch(error) {
+    $("map-scale-error").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function openObject(d = null, position = null, preferredKind = "house", asBuilding = false) {
   $("object-form").reset();
   $("object-error").textContent = "";
@@ -559,6 +643,17 @@ function openObject(d = null, position = null, preferredKind = "house", asBuildi
   $("building-width").value = String(d?.building_width ?? 15);
   $("building-height").value = String(d?.building_height ?? 12);
   $("building-rotation").value = String(d?.building_rotation ?? 0);
+  if (state.map_scale) {
+    $("building-width-m").value = String(
+      percentToMeters(d?.building_width ?? 15, state.map_scale.width_m));
+    $("building-height-m").value = String(
+      percentToMeters(d?.building_height ?? 12, state.map_scale.height_m));
+    $("building-width-m").max = String(state.map_scale.width_m * 0.65);
+    $("building-height-m").max = String(state.map_scale.height_m * 0.65);
+  } else {
+    $("building-width-m").value = "";
+    $("building-height-m").value = "";
+  }
   syncCameraFields();
   syncBuildingFields();
   $("object-zone").value = d ? d.zone : "";
@@ -566,7 +661,7 @@ function openObject(d = null, position = null, preferredKind = "house", asBuildi
   const y = position ? position.y : d ? d.y : 0.5;
   $("object-x").value = x;
   $("object-y").value = y;
-  $("object-coords").textContent = "Положение на карте: " + Math.round(x * 100) + "% / " + Math.round(y * 100) + "%";
+  updatePositionLabel(x, y);
   $("dialog-title").textContent = d ? "Изменить объект" : "Новый объект";
   setPlacing(false);
   $("object-dialog").showModal();
@@ -584,6 +679,11 @@ function syncBuildingFields() {
   const visible = ["building", "house", "boiler"].includes($("object-kind").value);
   $("building-fields").hidden = !visible;
   $("building-dimensions").hidden = !visible || !$("building-shape").checked;
+  $("building-percent-fields").hidden = Boolean(state.map_scale);
+  $("building-meter-fields").hidden = !state.map_scale;
+  $("building-size-hint").textContent = state.map_scale
+    ? "Контуры привязаны к изображению; если изменить размеры плана, их расчётные метры изменятся."
+    : "Укажите размеры плана, чтобы вводить габариты строений в метрах.";
   $("building-width-value").textContent = $("building-width").value + "%";
   $("building-height-value").textContent = $("building-height").value + "%";
   $("building-rotation-value").textContent = $("building-rotation").value + "°";
@@ -610,8 +710,8 @@ function deviceRow(d, compact = false) {
   content.append(el("strong", "", d.name));
   content.append(el("small", "", (d.zone || (kinds[d.kind] || kinds.other).label)
     + (d.kind === "camera" ? " · обзор " + d.camera_fov + "° / " + d.camera_direction + "°" : "")
-    + (isBuilding(d) ? " · контур " + d.building_width + "×" + d.building_height
-      + "% · " + d.building_rotation + "°" : "")
+    + (isBuilding(d) ? " · контур " + buildingDimensionLabel(d)
+      + " · " + d.building_rotation + "°" : "")
     + " · " + statusText(d)));
   node.append(glyph, content);
   if (!compact) {
@@ -1071,6 +1171,12 @@ function installHandlers() {
   document.querySelectorAll("[data-go]").forEach((node) => {
     node.addEventListener("click", () => navigate(node.dataset.go));
   });
+  $("map-scale-btn").addEventListener("click", openMapScaleEditor);
+  $("settings-map-scale-btn").addEventListener("click", openMapScaleEditor);
+  $("map-scale-form").addEventListener("submit", saveMapScale);
+  $("map-scale-close").addEventListener("click", () => $("map-scale-dialog").close());
+  $("map-scale-cancel").addEventListener("click", () => $("map-scale-dialog").close());
+  $("map-scale-clear").addEventListener("click", clearMapScale);
   $("map-add-camera-btn").addEventListener("click", () => startMapPlacement("camera"));
   $("map-add-building-btn").addEventListener("click", () => startMapPlacement("building", true));
   $("object-kind").addEventListener("change", () => {
@@ -1119,12 +1225,24 @@ function installHandlers() {
       data.building_shape = $("building-shape").checked;
       data.building_width = Number($("building-width").value);
       data.building_height = Number($("building-height").value);
+      if (data.building_shape && state.map_scale) {
+        data.building_width = metersToPercent(
+          Number($("building-width-m").value), state.map_scale.width_m);
+        data.building_height = metersToPercent(
+          Number($("building-height-m").value), state.map_scale.height_m);
+      }
       data.building_rotation = Number($("building-rotation").value);
     }
     const save = $("dialog-save");
     save.disabled = true;
     $("object-error").textContent = "";
     try {
+      if (data.building_shape && state.map_scale &&
+          (!Number.isFinite(data.building_width) || !Number.isFinite(data.building_height)
+           || !Number($("building-width-m").value) || !Number($("building-height-m").value)
+           || data.building_width < 0.1 || data.building_width > 65
+           || data.building_height < 0.1 || data.building_height > 65))
+        throw new Error("Размеры строения должны быть больше 0 и не превышать 65% плана.");
       if (id) await api("/api/devices/" + encodeURIComponent(id), "PATCH", data);
       else await api("/api/devices", "POST", data);
       $("object-dialog").close();
