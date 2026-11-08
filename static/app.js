@@ -42,6 +42,7 @@ let updateLatest = null;
 let updateLatestVersion = null;
 let updateAvailable = false;
 let updateChecking = false;
+let updateCheckedAt = 0;
 let updateInstalling = false;
 let updateRequestedHere = false;
 let networkInfo = { lan: [], zigbee: [], scan: {}, zigbee_status: {}, gateway: {} };
@@ -125,7 +126,11 @@ function navigate(view) {
   const titles = { territory: "Территория", devices: "Оборудование", network: "Устройства сети", events: "События", settings: "Настройки" };
   $("breadcrumb-current").textContent = titles[view] || view;
   if (view !== "territory") setPlacing(false);
-  if (view === "settings" && csrf) loadUpdateStatus();
+  if (view === "settings" && csrf) {
+    loadUpdateStatus();
+    if (Date.now() - updateCheckedAt > 10 * 60 * 1000) checkForUpdate();
+  }
+  if (view === "territory") renderCameraCoverage();
   if (view === "network" && csrf) loadNetworkDevices();
 }
 
@@ -526,7 +531,9 @@ function showUpdateStatus() {
   if (!updateInfo) return;
   const badge = $("update-badge");
   const stage = updateInfo.state || "idle";
-  badge.textContent = updateInfo.enabled ? (phaseLabels[stage] || "Готово") : "Не настроено";
+  badge.textContent = !updateInfo.enabled ? "Не настроено"
+    : updateAvailable && !["queued", "running", "stalled"].includes(stage)
+      ? "Доступна новая версия" : (phaseLabels[stage] || "Готово");
   badge.className = "update-badge" + (stage === "failed" || stage === "rolled_back" ? " update-alert"
     : stage === "success" ? " update-ok" : "");
   $("update-current").textContent = releaseLabel(
@@ -572,7 +579,9 @@ async function loadUpdateStatus() {
   }
 }
 async function checkForUpdate() {
-  if (updateChecking || !csrf) return;
+  if (updateChecking || updateInstalling || !csrf
+      || (updateInfo && ["queued", "running", "stalled"].includes(updateInfo.state))) return;
+  updateCheckedAt = Date.now();
   updateChecking = true;
   showUpdateStatus();
   try {
@@ -896,7 +905,10 @@ function installHandlers() {
     if (csrf && currentView === "network") loadNetworkDevices();
   }, 5500);
   setInterval(() => {
-    if (csrf && currentView === "settings") loadUpdateStatus();
+    if (csrf && currentView === "settings") {
+      loadUpdateStatus();
+      if (Date.now() - updateCheckedAt > 10 * 60 * 1000) checkForUpdate();
+    }
   }, 3000);
   setInterval(() => {
     if (csrf && !dragging && !$("object-dialog").open && !busy) refresh();

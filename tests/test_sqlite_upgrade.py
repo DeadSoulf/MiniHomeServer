@@ -57,6 +57,7 @@ class SqliteUpgradeTests(unittest.TestCase):
             try:
                 server.DATA, server.DB = location, db_path
                 server.init_db()
+                server.init_db()  # Restarting must not repeat any ALTER operation.
                 with sqlite3.connect(db_path) as db:
                     tables = {r[0] for r in db.execute(
                         "SELECT name FROM sqlite_master WHERE type='table'"

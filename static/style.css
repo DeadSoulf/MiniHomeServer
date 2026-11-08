@@ -165,7 +165,7 @@ h2 { font-size:16px; margin:0; letter-spacing:-.35px; font-weight:650; }
 .map-marker.dragging { z-index:10; opacity:.95; cursor:grabbing; }
 .map-stage.editing .map-marker { cursor:grab; }
 .map-footer { display:flex; justify-content:space-between; align-items:center; gap:20px; padding:17px 25px; font-size:11px; color:#8296ab; }
-.map-legend { display:flex; align-items:center; gap:9px; }
+.map-legend { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
 .legend-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
 .legend-dot.gray { background:#a5b5c0; }
 .legend-dot.cyan { background:var(--accent); }
