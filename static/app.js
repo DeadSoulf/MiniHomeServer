@@ -1,9 +1,10 @@
-/* MiniHomeServer dashboard v0.3.7 — camera coverage and release labels. */
+/* MiniHomeServer dashboard v0.3.8 — interactive territory, buildings and cameras. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
 const kinds = {
   house: { icon: "⌂", label: "Дом / здание" },
+  building: { icon: "▱", label: "Строение" },
   boiler: { icon: "♨", label: "Котельная" },
   camera: { icon: "◉", label: "Камера" },
   light: { icon: "☀", label: "Освещение" },
@@ -32,7 +33,15 @@ let state = { devices: [], events: [], map_url: null, integrations: [], version:
 let editing = false;
 let placing = false;
 let placementKind = "house";
+let placementBuilding = false;
 let dragging = null;
+let mapZoom = 1;
+let mapPanX = 0;
+let mapPanY = 0;
+const mapPointers = new Map();
+let mapPanStart = null;
+let mapPinchStart = null;
+let suppressMapClickUntil = 0;
 let currentView = "territory";
 let lastMapUrl = null;
 let toastTimer = null;
@@ -130,7 +139,10 @@ function navigate(view) {
     loadUpdateStatus();
     if (Date.now() - updateCheckedAt > 10 * 60 * 1000) checkForUpdate();
   }
-  if (view === "territory") renderCameraCoverage();
+  if (view === "territory") {
+    applyMapTransform();
+    renderCameraCoverage();
+  }
   if (view === "network" && csrf) loadNetworkDevices();
 }
 
@@ -172,7 +184,8 @@ function renderMap() {
       empty.hidden = true;
       image.onload = () => {
         if (image.naturalWidth && image.naturalHeight)
-          stage.style.aspectRatio = image.naturalWidth + " / " + image.naturalHeight;
+          $("map-viewport").style.aspectRatio = image.naturalWidth + " / " + image.naturalHeight;
+        applyMapTransform();
         renderCameraCoverage();
       };
       image.src = state.map_url;
@@ -180,7 +193,7 @@ function renderMap() {
       image.hidden = true;
       image.removeAttribute("src");
       empty.hidden = false;
-      stage.style.aspectRatio = "16 / 10";
+      $("map-viewport").style.aspectRatio = "16 / 10";
     }
   }
   stage.classList.toggle("editing", editing);
@@ -188,15 +201,40 @@ function renderMap() {
   $("edit-map-btn").classList.toggle("selected", editing);
   $("edit-map-btn").setAttribute("aria-pressed", String(editing));
   $("map-mode-label").textContent = placing
-    ? (placementKind === "camera" ? "Выберите место установки камеры" : "Нажмите на точку карты, чтобы разместить объект")
+    ? "Нажмите точку плана для размещения: " + (placementKind === "building" ? "строение" : placementKind === "camera" ? "камера" : "объект")
     : editing
-      ? "Перетаскивайте значки по карте — расположение сохранится"
-      : "Нажмите «Редактировать», чтобы перемещать объекты";
+      ? "Перетаскивайте объекты или свободную область карты"
+      : "Тяните карту для перемещения · колесо / ± — масштаб · «Редактировать» — двигать объекты";
   renderCameraCoverage();
   if (dragging) return;
+  const buildingLayer = $("map-buildings");
+  buildingLayer.replaceChildren();
+  for (const d of state.devices) {
+    if (!isBuilding(d)) continue;
+    const node = el("button", "map-building");
+    node.type = "button";
+    node.style.left = (d.x * 100) + "%";
+    node.style.top = (d.y * 100) + "%";
+    node.style.width = d.building_width + "%";
+    node.style.height = d.building_height + "%";
+    node.style.setProperty("--building-angle", d.building_rotation + "deg");
+    node.dataset.id = d.id;
+    node.title = d.name + " · " + d.building_width + "% × " + d.building_height
+      + "% · поворот " + d.building_rotation + "°";
+    node.setAttribute("aria-label", node.title);
+    node.append(el("span", "map-building-label", d.name));
+    node.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (node.dataset.justDragged === "1") return;
+      openObject(d);
+    });
+    node.addEventListener("pointerdown", (ev) => startDrag(ev, d, node));
+    buildingLayer.append(node);
+  }
   const layer = $("map-markers");
   layer.replaceChildren();
   for (const d of state.devices) {
+    if (isBuilding(d)) continue;
     const node = el("button", "map-marker");
     node.type = "button";
     node.style.left = (d.x * 100) + "%";
@@ -220,6 +258,10 @@ function renderMap() {
   }
 }
 
+function isBuilding(d) {
+  return Boolean(d.building_shape) && ["building", "house", "boiler"].includes(d.kind);
+}
+
 // Angles are clockwise from the top of the map (0° up, 90° right).
 function cameraSectorPath(cx, cy, radius, fov, direction) {
   if (fov >= 360) return "";
@@ -238,8 +280,11 @@ function cameraSectorPath(cx, cy, radius, fov, direction) {
 function renderCameraCoverage(preview = null) {
   const layer = $("map-camera-coverage");
   if (!layer) return;
-  const bounds = $("map-stage").getBoundingClientRect();
-  const w = bounds.width, h = bounds.height;
+  const stage = $("map-stage");
+  const bounds = stage.getBoundingClientRect();
+  // clientWidth is not affected by the CSS zoom transform.
+  const w = stage.clientWidth || bounds.width / mapZoom;
+  const h = stage.clientHeight || bounds.height / mapZoom;
   if (!w || !h) return;
   layer.setAttribute("viewBox", "0 0 " + w + " " + h);
   layer.replaceChildren();
@@ -278,9 +323,161 @@ function setPlacing(value) {
   placing = Boolean(value);
   $("map-stage").classList.toggle("placing", placing);
   $("map-mode-label").textContent = placing
-    ? (placementKind === "camera" ? "Нажмите место установки камеры" : "Нажмите место на карте для нового объекта")
-    : editing ? "Перемещайте значки по карте" : "Нажмите «Редактировать», чтобы перемещать объекты";
+    ? "Нажмите точку на плане для размещения"
+    : editing ? "Перемещайте объекты и контуры" : "Перемещайте план мышью или пальцем";
 }
+function clampMapZoom(value) {
+  return Math.max(0.5, Math.min(5, value));
+}
+
+// The map point beneath the cursor stays beneath it after a zoom.
+function zoomPanAround(oldZoom, nextZoom, panX, panY, anchorX, anchorY) {
+  const zoom = clampMapZoom(nextZoom);
+  const factor = zoom / oldZoom;
+  return {
+    zoom,
+    x: anchorX - (anchorX - panX) * factor,
+    y: anchorY - (anchorY - panY) * factor,
+  };
+}
+
+function clampMapPan() {
+  const viewport = $("map-viewport");
+  const width = viewport.clientWidth || viewport.getBoundingClientRect().width;
+  const height = viewport.clientHeight || viewport.getBoundingClientRect().height;
+  if (!width || !height) return;
+  const clampAxis = (pan, size) => {
+    const scaled = size * mapZoom;
+    const margin = Math.min(size * 0.12, 80);
+    if (scaled < size) {
+      const centered = (size - scaled) / 2;
+      return Math.max(centered - margin, Math.min(centered + margin, pan));
+    }
+    return Math.max(size - scaled - margin, Math.min(margin, pan));
+  };
+  mapPanX = clampAxis(mapPanX, width);
+  mapPanY = clampAxis(mapPanY, height);
+}
+function applyMapTransform() {
+  const stage = $("map-stage");
+  if (!stage) return;
+  clampMapPan();
+  stage.style.transform = "translate(" + mapPanX + "px," + mapPanY + "px) scale(" + mapZoom + ")";
+  $("map-zoom-label").textContent = Math.round(mapZoom * 100) + "%";
+}
+function zoomMap(nextZoom, clientX = null, clientY = null) {
+  const viewport = $("map-viewport").getBoundingClientRect();
+  const x = clientX === null ? viewport.width / 2 : clientX - viewport.left;
+  const y = clientY === null ? viewport.height / 2 : clientY - viewport.top;
+  const next = zoomPanAround(mapZoom, nextZoom, mapPanX, mapPanY, x, y);
+  mapZoom = next.zoom;
+  mapPanX = next.x;
+  mapPanY = next.y;
+  applyMapTransform();
+}
+function resetMapView() {
+  mapZoom = 1;
+  mapPanX = 0;
+  mapPanY = 0;
+  applyMapTransform();
+}
+
+function setupMapGestures() {
+  const viewport = $("map-viewport");
+  const skip = (target) => target.closest(
+    ".map-marker,.map-building,.map-zoom-controls,button,label,input"
+  );
+  const startPinch = () => {
+    const [a, b] = [...mapPointers.values()];
+    if (!a || !b) return;
+    const rect = viewport.getBoundingClientRect();
+    const midX = (a.x + b.x) / 2 - rect.left;
+    const midY = (a.y + b.y) / 2 - rect.top;
+    mapPinchStart = {
+      zoom: mapZoom,
+      distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      mapX: (midX - mapPanX) / mapZoom,
+      mapY: (midY - mapPanY) / mapZoom,
+    };
+    mapPanStart = null;
+    suppressMapClickUntil = Date.now() + 350;
+  };
+  viewport.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (skip(event.target)) return;
+    mapPointers.set(event.pointerId, {x:event.clientX, y:event.clientY});
+    viewport.setPointerCapture(event.pointerId);
+    if (mapPointers.size >= 2) startPinch();
+    else {
+      mapPanStart = {pointerId:event.pointerId, x:event.clientX, y:event.clientY,
+                     panX:mapPanX, panY:mapPanY, moved:false};
+    }
+  });
+  viewport.addEventListener("pointermove", (event) => {
+    if (!mapPointers.has(event.pointerId)) return;
+    mapPointers.set(event.pointerId, {x:event.clientX, y:event.clientY});
+    if (mapPointers.size >= 2 && mapPinchStart) {
+      const [a,b] = [...mapPointers.values()];
+      const rect = viewport.getBoundingClientRect();
+      const centerX = (a.x + b.x)/2 - rect.left;
+      const centerY = (a.y + b.y)/2 - rect.top;
+      const distance = Math.hypot(a.x - b.x, a.y - b.y);
+      mapZoom = clampMapZoom(mapPinchStart.zoom * distance / mapPinchStart.distance);
+      mapPanX = centerX - mapPinchStart.mapX * mapZoom;
+      mapPanY = centerY - mapPinchStart.mapY * mapZoom;
+      suppressMapClickUntil = Date.now() + 350;
+      applyMapTransform();
+    } else if (mapPanStart && mapPanStart.pointerId === event.pointerId) {
+      const dx = event.clientX - mapPanStart.x;
+      const dy = event.clientY - mapPanStart.y;
+      if (!mapPanStart.moved && Math.hypot(dx,dy) > 5) mapPanStart.moved = true;
+      if (mapPanStart.moved) {
+        viewport.classList.add("is-panning");
+        mapPanX = mapPanStart.panX + dx;
+        mapPanY = mapPanStart.panY + dy;
+        suppressMapClickUntil = Date.now() + 350;
+        applyMapTransform();
+      }
+    }
+  });
+  const release = (event) => {
+    if (!mapPointers.has(event.pointerId)) return;
+    if ((mapPanStart && mapPanStart.moved) || mapPinchStart)
+      suppressMapClickUntil = Date.now() + 350;
+    mapPointers.delete(event.pointerId);
+    if (mapPointers.size >= 2) startPinch();
+    else if (mapPointers.size === 1) {
+      const [pid, point] = mapPointers.entries().next().value;
+      mapPanStart = {pointerId:pid,x:point.x,y:point.y,
+                     panX:mapPanX,panY:mapPanY,moved:false};
+      mapPinchStart = null;
+    } else {
+      mapPanStart = null;
+      mapPinchStart = null;
+      viewport.classList.remove("is-panning");
+    }
+    if (viewport.hasPointerCapture(event.pointerId))
+      viewport.releasePointerCapture(event.pointerId);
+  };
+  viewport.addEventListener("pointerup", release);
+  viewport.addEventListener("pointercancel", release);
+  viewport.addEventListener("lostpointercapture", release);
+  viewport.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    zoomMap(mapZoom * Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY);
+  }, {passive:false});
+  $("map-zoom-in").addEventListener("click", () => zoomMap(mapZoom * 1.25));
+  $("map-zoom-out").addEventListener("click", () => zoomMap(mapZoom / 1.25));
+  $("map-zoom-reset").addEventListener("click", resetMapView);
+  viewport.addEventListener("click", (event) => {
+    if (!placing || Date.now() < suppressMapClickUntil || skip(event.target)) return;
+    const r = $("map-stage").getBoundingClientRect();
+    if (event.clientX < r.left || event.clientX > r.right ||
+        event.clientY < r.top || event.clientY > r.bottom) return;
+    openObject(null, mapPosition(event), placementKind, placementBuilding);
+  });
+}
+
 function mapPosition(event) {
   const rect = $("map-stage").getBoundingClientRect();
   return {
@@ -293,11 +490,17 @@ function startDrag(event, d, node) {
   event.preventDefault();
   event.stopPropagation();
   node.setPointerCapture(event.pointerId);
-  dragging = { id: d.id, node, startX: event.clientX, startY: event.clientY, moved: false };
+  const grab = mapPosition(event);
+  dragging = { id: d.id, node, startX: event.clientX, startY: event.clientY, moved: false,
+               offsetX: d.x - grab.x, offsetY: d.y - grab.y };
   node.classList.add("dragging");
   const move = (ev) => {
     if (!dragging || ev.pointerId !== event.pointerId) return;
-    const pos = mapPosition(ev);
+    const raw = mapPosition(ev);
+    const pos = {
+      x: Math.round(Math.max(0, Math.min(1, raw.x + dragging.offsetX)) * 100000)/100000,
+      y: Math.round(Math.max(0, Math.min(1, raw.y + dragging.offsetY)) * 100000)/100000,
+    };
     node.style.left = (pos.x * 100) + "%";
     node.style.top = (pos.y * 100) + "%";
     if (d.kind === "camera") renderCameraCoverage({ id: d.id, ...pos });
@@ -310,13 +513,18 @@ function startDrag(event, d, node) {
     node.removeEventListener("pointercancel", cancel);
     if (ev.pointerId !== event.pointerId) return;
     const moved = dragging && dragging.moved;
+    const draggingOffset = {x: dragging?.offsetX ?? 0, y: dragging?.offsetY ?? 0};
     dragging = null;
     node.classList.remove("dragging");
     if (!moved) return;
     node.dataset.justDragged = "1";
     setTimeout(() => { node.dataset.justDragged = ""; }, 200);
     try {
-      const pos = mapPosition(ev);
+      const raw = mapPosition(ev);
+      const pos = {
+        x: Math.round(Math.max(0, Math.min(1, raw.x + draggingOffset.x)) * 100000)/100000,
+        y: Math.round(Math.max(0, Math.min(1, raw.y + draggingOffset.y)) * 100000)/100000,
+      };
       await api("/api/devices/" + encodeURIComponent(d.id), "PATCH", pos);
       await refresh();
       notify("Расположение сохранено");
@@ -338,7 +546,7 @@ function startDrag(event, d, node) {
   node.addEventListener("pointercancel", cancel);
 }
 
-function openObject(d = null, position = null, preferredKind = "house") {
+function openObject(d = null, position = null, preferredKind = "house", asBuilding = false) {
   $("object-form").reset();
   $("object-error").textContent = "";
   $("object-id").value = d ? d.id : "";
@@ -347,7 +555,12 @@ function openObject(d = null, position = null, preferredKind = "house") {
   $("camera-fov").value = String(d?.camera_fov ?? 90);
   $("camera-direction").value = String(d?.camera_direction ?? 0);
   $("camera-reach").value = String(d?.camera_reach ?? 25);
+  $("building-shape").checked = d ? Boolean(d.building_shape) : asBuilding;
+  $("building-width").value = String(d?.building_width ?? 15);
+  $("building-height").value = String(d?.building_height ?? 12);
+  $("building-rotation").value = String(d?.building_rotation ?? 0);
   syncCameraFields();
+  syncBuildingFields();
   $("object-zone").value = d ? d.zone : "";
   const x = position ? position.x : d ? d.x : 0.5;
   const y = position ? position.y : d ? d.y : 0.5;
@@ -367,17 +580,26 @@ function syncCameraFields() {
   $("camera-reach-value").textContent = $("camera-reach").value + "%";
 }
 
-function startMapPlacement(kind = "house") {
+function syncBuildingFields() {
+  const visible = ["building", "house", "boiler"].includes($("object-kind").value);
+  $("building-fields").hidden = !visible;
+  $("building-dimensions").hidden = !visible || !$("building-shape").checked;
+  $("building-width-value").textContent = $("building-width").value + "%";
+  $("building-height-value").textContent = $("building-height").value + "%";
+  $("building-rotation-value").textContent = $("building-rotation").value + "°";
+}
+
+function startMapPlacement(kind = "house", building = false) {
   navigate("territory");
   placementKind = kind;
+  placementBuilding = building;
   if (state.map_url) {
     setPlacing(true);
     renderMap();
-    notify(kind === "camera"
-      ? "Нажмите на карте место установки камеры"
-      : "Нажмите на карте место для нового объекта");
+    notify(kind === "camera" ? "Нажмите место установки камеры"
+      : building ? "Нажмите место нового строения" : "Нажмите место нового объекта");
   } else {
-    openObject(null, null, kind);
+    openObject(null, null, kind, building);
   }
 }
 
@@ -388,6 +610,8 @@ function deviceRow(d, compact = false) {
   content.append(el("strong", "", d.name));
   content.append(el("small", "", (d.zone || (kinds[d.kind] || kinds.other).label)
     + (d.kind === "camera" ? " · обзор " + d.camera_fov + "° / " + d.camera_direction + "°" : "")
+    + (isBuilding(d) ? " · контур " + d.building_width + "×" + d.building_height
+      + "% · " + d.building_rotation + "°" : "")
     + " · " + statusText(d)));
   node.append(glyph, content);
   if (!compact) {
@@ -847,11 +1071,24 @@ function installHandlers() {
     node.addEventListener("click", () => navigate(node.dataset.go));
   });
   $("map-add-camera-btn").addEventListener("click", () => startMapPlacement("camera"));
-  $("object-kind").addEventListener("change", syncCameraFields);
+  $("map-add-building-btn").addEventListener("click", () => startMapPlacement("building", true));
+  $("object-kind").addEventListener("change", () => {
+    if ($("object-kind").value === "building") $("building-shape").checked = true;
+    syncCameraFields();
+    syncBuildingFields();
+  });
+  $("building-shape").addEventListener("change", syncBuildingFields);
+  ["building-width", "building-height", "building-rotation"].forEach((id) =>
+    $(id).addEventListener("input", syncBuildingFields));
   $("camera-fov").addEventListener("input", syncCameraFields);
   $("camera-direction").addEventListener("input", syncCameraFields);
   $("camera-reach").addEventListener("input", syncCameraFields);
-  window.addEventListener("resize", () => renderCameraCoverage());
+  window.addEventListener("resize", () => {
+    applyMapTransform();
+    renderCameraCoverage();
+  });
+  setupMapGestures();
+  applyMapTransform();
   $("edit-map-btn").addEventListener("click", () => {
     editing = !editing;
     setPlacing(false);
@@ -859,10 +1096,6 @@ function installHandlers() {
   });
   $("add-object-btn").addEventListener("click", () => startMapPlacement("house"));
   $("devices-add-btn").addEventListener("click", () => openObject());
-  $("map-stage").addEventListener("click", (e) => {
-    if (!placing || e.target.closest(".map-marker")) return;
-    openObject(null, mapPosition(e), placementKind);
-  });
   $("map-file").addEventListener("change", (e) => uploadMap(e.target.files[0]));
   $("dialog-close").addEventListener("click", () => $("object-dialog").close());
   $("dialog-cancel").addEventListener("click", () => $("object-dialog").close());
@@ -880,6 +1113,12 @@ function installHandlers() {
       data.camera_fov = Number($("camera-fov").value);
       data.camera_direction = Number($("camera-direction").value);
       data.camera_reach = Number($("camera-reach").value);
+    }
+    if (["building", "house", "boiler"].includes(data.kind)) {
+      data.building_shape = $("building-shape").checked;
+      data.building_width = Number($("building-width").value);
+      data.building_height = Number($("building-height").value);
+      data.building_rotation = Number($("building-rotation").value);
     }
     const save = $("dialog-save");
     save.disabled = true;
@@ -911,7 +1150,7 @@ function installHandlers() {
     }
   }, 3000);
   setInterval(() => {
-    if (csrf && !dragging && !$("object-dialog").open && !busy) refresh();
+    if (csrf && !dragging && !mapPanStart && !mapPinchStart && !$("object-dialog").open && !busy) refresh();
   }, 20000);
 }
 installHandlers();
