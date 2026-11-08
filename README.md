@@ -20,7 +20,7 @@
 
 ## Запуск на Debian
 
-Подробная инструкция для Docker **или минимального Debian без Docker**: [DEPLOY.md](DEPLOY.md). Поиск устройств и настройки Zigbee: [NETWORK.md](NETWORK.md). Обновления без SSH после первичной настройки: [UPDATES.md](UPDATES.md). Доступ по IP или через Termalin: [ACCESS.md](ACCESS.md). Готовый установщик systemd: [scripts/install-systemd.sh](scripts/install-systemd.sh).
+Подробная инструкция для Docker **или минимального Debian без Docker**: [DEPLOY.md](DEPLOY.md). Поиск устройств и настройки Zigbee: [NETWORK.md](NETWORK.md). Обновления без SSH после первичной настройки: [UPDATES.md](UPDATES.md). Доступ по IP или через Termalin: [ACCESS.md](ACCESS.md). Готовый установщик systemd: [scripts/install-systemd.sh](scripts/install-systemd.sh). Если веб-панель стала недоступна, есть [аварийное восстановление](scripts/recover-web.sh) для существующей systemd-установки; оно не удаляет SQLite, карту и пароль.
 
 ```bash
 git clone https://github.com/DeadSoulf/MiniHomeServer.git
