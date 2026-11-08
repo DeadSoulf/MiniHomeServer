@@ -50,7 +50,7 @@ SESSION_TTL = 12 * 3600
 KINDS = {"house", "boiler", "camera", "light", "gate", "sensor", "switch", "other"}
 FAILURES: dict[str, list[float]] = {}
 LOCK = threading.RLock()
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 GITHUB_API = "https://api.github.com/repos/DeadSoulf/MiniHomeServer/commits/main"
 REVISION_FILE = BASE / ".release-commit"
 UPDATE_STATUS = DATA / "update-status.json"
@@ -306,21 +306,91 @@ def image_bytes(data_url: str):
 # LAN discovery is scoped to the server's directly connected private IPv4 /24
 # networks. Never scan routed/public networks or probe arbitrary user-supplied
 # targets. Only a manual button or opening the Network page starts a scan.
-def _ip_json(arguments):
-    binary = shutil.which("ip") or next(
-        (path for path in ("/usr/sbin/ip", "/usr/bin/ip", "/sbin/ip") if os.path.isfile(path)),
-        None
-    )
-    if not binary:
-        raise RuntimeError("На Debian отсутствует утилита ip (пакет iproute2)")
-    result = subprocess.run([binary, "-j", *arguments], capture_output=True,
-                            text=True, timeout=5, check=False)
-    if result.returncode:
-        raise RuntimeError("Не удалось получить сетевые параметры Debian")
+def _ioctl_ipv4_interfaces():
+    """Read interface IPv4 settings without AF_NETLINK (systemd sandbox fallback)."""
+    import fcntl
+
     try:
-        return json.loads(result.stdout)
-    except ValueError as exc:
-        raise RuntimeError("Некорректный ответ iproute2") from exc
+        names = [entry.name for entry in Path("/sys/class/net").iterdir()]
+    except OSError:
+        try:
+            names = [line.split(":", 1)[0].strip()
+                     for line in Path("/proc/net/dev").read_text(encoding="ascii").splitlines()[2:]
+                     if ":" in line]
+        except OSError as exc:
+            raise RuntimeError("Не удалось перечислить сетевые интерфейсы Debian") from exc
+
+    found = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            for name in names:
+                raw_name = name.encode("utf-8")
+                if not raw_name or len(raw_name) > 15:
+                    continue
+                request = struct.pack("256s", raw_name)
+                try:
+                    address = fcntl.ioctl(sock.fileno(), 0x8915, request)  # SIOCGIFADDR
+                    netmask = fcntl.ioctl(sock.fileno(), 0x891b, request)  # SIOCGIFNETMASK
+                    ipv4 = socket.inet_ntoa(address[20:24])
+                    mask = socket.inet_ntoa(netmask[20:24])
+                    prefix = ipaddress.IPv4Network(f"0.0.0.0/{mask}").prefixlen
+                except (OSError, ValueError):
+                    continue
+                found.append({"ifname": name, "addr_info": [{
+                    "family": "inet", "scope": "global",
+                    "local": ipv4, "prefixlen": prefix,
+                }]})
+    except OSError as exc:
+        raise RuntimeError("Служба не может прочитать IPv4 интерфейсы Debian") from exc
+    return found
+
+
+def _proc_arp_entries(path=Path("/proc/net/arp")):
+    """Read the kernel ARP cache without AF_NETLINK or additional privileges."""
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()[1:]
+    except OSError as exc:
+        raise RuntimeError("Недоступна таблица ARP в /proc/net/arp") from exc
+    found = []
+    for line in lines:
+        columns = line.split()
+        if len(columns) < 6:
+            continue
+        ip, _hardware, flags, mac, _mask, interface = columns[:6]
+        try:
+            if not int(flags, 0) & 0x2:
+                continue
+        except ValueError:
+            continue
+        if not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac.lower()):
+            continue
+        found.append({"dst": ip, "lladdr": mac.lower(),
+                      "state": "REACHABLE", "dev": interface})
+    return found
+
+
+def _ip_json(arguments):
+    """Use iproute2 when allowed; otherwise use unprivileged ioctl and /proc."""
+    binary = shutil.which("ip") or next(
+        (path for path in ("/usr/sbin/ip", "/usr/bin/ip", "/sbin/ip")
+         if os.path.isfile(path)), None
+    )
+    if binary:
+        try:
+            result = subprocess.run([binary, "-j", *arguments], capture_output=True,
+                                    text=True, timeout=5, check=False)
+            if result.returncode == 0:
+                return json.loads(result.stdout)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            pass
+
+    # Linux iproute2 needs AF_NETLINK, which older MiniHomeServer systemd units
+    # prohibited. These read-only alternatives need only permitted AF_INET.
+    if arguments == ["-4", "addr", "show"]:
+        return _ioctl_ipv4_interfaces()
+    if arguments == ["-4", "neigh", "show"]:
+        return _proc_arp_entries()
+    raise RuntimeError("Невозможно выполнить неизвестную сетевую операцию")
 
 
 def local_networks():

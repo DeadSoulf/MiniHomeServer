@@ -1,4 +1,4 @@
-/* MiniHomeServer dashboard v0.3.3 — reliable updates and SQLite migration. */
+/* MiniHomeServer dashboard v0.3.4 — LAN discovery without netlink access. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);

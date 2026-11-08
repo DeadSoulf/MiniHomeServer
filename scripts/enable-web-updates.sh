@@ -148,6 +148,12 @@ cat > /etc/systemd/system/minihome.service.d/30-state-directory.conf <<'EOF'
 StateDirectory=minihome
 StateDirectoryMode=0700
 EOF
+# iproute2 queries the kernel over AF_NETLINK. Keep an ioctl/ARP fallback
+# in the application for servers that have not yet applied this drop-in.
+cat > /etc/systemd/system/minihome.service.d/40-network-discovery.conf <<'EOF'
+[Service]
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+EOF
 systemctl daemon-reload
 
 restore_code() {

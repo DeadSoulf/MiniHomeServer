@@ -111,7 +111,7 @@ ProtectKernelTunables=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 ReadWritePaths=/var/lib/minihome
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
