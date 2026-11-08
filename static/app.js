@@ -620,7 +620,8 @@ function deviceRow(d, compact = false) {
     actionsEl.append(button("На карте", "btn subtle small", () => {
       navigate("territory");
       setPlacing(false);
-      const marker = [...document.querySelectorAll(".map-marker")].find((m) => m.dataset.id === d.id);
+      const marker = [...document.querySelectorAll(".map-marker,.map-building")]
+        .find((m) => m.dataset.id === d.id);
       if (marker) {
         marker.classList.add("focused");
         setTimeout(() => marker.classList.remove("focused"), 2000);
