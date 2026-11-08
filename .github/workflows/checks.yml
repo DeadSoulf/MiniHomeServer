@@ -22,7 +22,7 @@ jobs:
       - name: Map upload regression tests
         run: node --test tests/test_map_upload.js
       - name: Systemd installer shell syntax
-        run: bash -n scripts/install-systemd.sh scripts/enable-all-interfaces.sh scripts/enable-web-updates.sh
+        run: bash -n scripts/install-systemd.sh scripts/enable-all-interfaces.sh scripts/enable-web-updates.sh scripts/recover-web.sh
       - name: Compose validation
         env:
           MINIHOME_ADMIN_PASSWORD: temporary-ci-validation-only
