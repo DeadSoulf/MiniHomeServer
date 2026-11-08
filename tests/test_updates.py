@@ -92,9 +92,12 @@ class UpdateAPITests(unittest.TestCase):
         current, _ = self.request("/api/update/status")
         self.assertTrue(current["enabled"])
 
-        with patch.object(server, "github_latest_sha", return_value=sha):
+        with (patch.object(server, "github_latest_sha", return_value=sha),
+              patch.object(server, "github_version_for_sha", return_value="0.3.7")):
             checked, _ = self.request("/api/update/check")
             self.assertEqual(checked["latest_sha"], sha)
+            self.assertEqual(checked["latest_version"], "0.3.7")
+            self.assertEqual(checked["current_version"], server.VERSION)
             self.assertTrue(checked["update_available"])
 
             with self.assertRaises(HTTPError) as ctx:

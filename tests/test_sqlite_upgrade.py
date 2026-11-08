@@ -63,6 +63,11 @@ class SqliteUpgradeTests(unittest.TestCase):
                     )}
                     self.assertIn("lan_nodes", tables)
                     self.assertIn("zigbee_nodes", tables)
+                    columns = {row[1] for row in db.execute("PRAGMA table_info(devices)")}
+                    self.assertTrue({"camera_fov", "camera_direction", "camera_reach"} <= columns)
+                    self.assertEqual(db.execute(
+                        "SELECT camera_fov,camera_direction,camera_reach FROM devices"
+                    ).fetchone(), (90, 0, 25))
                     self.assertEqual(db.execute("SELECT name FROM devices").fetchone()[0],
                                      "Existing boiler")
                     self.assertEqual(db.execute("SELECT value FROM settings").fetchone()[0],
