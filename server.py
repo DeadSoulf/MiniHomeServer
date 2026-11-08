@@ -50,7 +50,7 @@ SESSION_TTL = 12 * 3600
 KINDS = {"house", "boiler", "camera", "light", "gate", "sensor", "switch", "other"}
 FAILURES: dict[str, list[float]] = {}
 LOCK = threading.RLock()
-VERSION = "0.3.4"
+VERSION = "0.3.5"
 GITHUB_API = "https://api.github.com/repos/DeadSoulf/MiniHomeServer/commits/main"
 REVISION_FILE = BASE / ".release-commit"
 UPDATE_STATUS = DATA / "update-status.json"
@@ -439,10 +439,16 @@ def neighbor_cache(scopes):
     for item in items:
         ip = item.get("dst", "")
         mac = str(item.get("lladdr", "")).lower()
-        status = item.get("state", "")
+        # iproute2 JSON normally uses an array; accept older string output too.
+        status = item.get("state", [])
+        if isinstance(status, str):
+            status = status.split()
+        if not isinstance(status, list) or not all(isinstance(s, str) for s in status):
+            continue
+        states = {s.upper() for s in status}
         if (item.get("dev") not in allowed_interfaces or
                 not _in_scope(ip, nets) or
-                status in {"FAILED", "INCOMPLETE", "NONE"} or
+                states & {"FAILED", "INCOMPLETE", "NONE"} or
                 not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac)):
             continue
         result[ip] = mac

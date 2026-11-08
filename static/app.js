@@ -1,4 +1,4 @@
-/* MiniHomeServer dashboard v0.3.4 — LAN discovery without netlink access. */
+/* MiniHomeServer dashboard v0.3.5 — LAN discovery with iproute2 array states and netlink fallback. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
