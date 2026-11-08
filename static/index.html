@@ -80,16 +80,17 @@
 
           <div class="map-card">
             <div class="card-header">
-              <div><h2>Карта территории</h2><p>Нажмите на объект, чтобы открыть сведения. В режиме редактирования объекты можно перемещать.</p></div>
+              <div><h2>Карта территории</h2><p>Перетаскивайте свободную область для перемещения плана, меняйте масштаб колесом или кнопками. Строения и оборудование перемещаются в режиме редактирования.</p></div>
               <div class="toolbar">
                 <label class="btn secondary" for="map-file"><span aria-hidden="true">↥</span> Загрузить план</label>
                 <input id="map-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+                <button id="map-add-building-btn" class="btn secondary" type="button">▱ Добавить строение</button>
                 <button id="map-add-camera-btn" class="btn secondary" type="button">◉ Добавить камеру</button>
                 <button id="edit-map-btn" class="btn secondary" type="button" aria-pressed="false">✎ Редактировать</button>
               </div>
             </div>
-            <div class="map-viewport">
-              <div id="map-stage" class="map-stage" aria-label="Интерактивная карта территории">
+            <div id="map-viewport" class="map-viewport" aria-label="Интерактивный план: перемещение и масштаб">
+              <div id="map-stage" class="map-stage" aria-label="Карта территории">
                 <img id="map-image" alt="План территории" hidden>
                 <div id="map-empty" class="map-empty">
                   <div class="empty-icon">⌗</div>
@@ -98,12 +99,19 @@
                   <label class="btn primary" for="map-file">Загрузить карту</label>
                 </div>
                 <svg id="map-camera-coverage" class="map-camera-coverage" aria-hidden="true"></svg>
+                <div id="map-buildings" class="map-buildings"></div>
                 <div id="map-markers" class="map-markers"></div>
                 <div class="map-grid" aria-hidden="true"></div>
               </div>
+              <div class="map-zoom-controls" aria-label="Масштаб плана">
+                <button class="map-zoom-button" id="map-zoom-out" type="button" title="Уменьшить масштаб" aria-label="Уменьшить масштаб">−</button>
+                <output class="map-zoom-label" id="map-zoom-label" aria-live="off">100%</output>
+                <button class="map-zoom-button" id="map-zoom-in" type="button" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button>
+                <button class="map-zoom-button map-zoom-reset" id="map-zoom-reset" type="button" title="Вместить план" aria-label="Сбросить масштаб и положение">Сброс</button>
+              </div>
             </div>
             <div class="map-footer">
-              <div class="map-legend"><span class="legend-dot gray"></span> Нет данных <span class="legend-sep"></span><span class="legend-dot cyan"></span> Выбранный объект <span class="legend-sep"></span><span class="legend-camera-sector"></span> Обзор камеры (схема)</div>
+              <div class="map-legend"><span class="legend-dot gray"></span> Нет данных <span class="legend-sep"></span><span class="legend-dot cyan"></span> Выбранный объект <span class="legend-sep"></span><span class="legend-camera-sector"></span> Обзор камеры (схема) <span class="legend-sep"></span><span class="legend-building"></span> Контур строения</div>
               <span id="map-mode-label" class="map-tip">Нажмите «Редактировать», чтобы перемещать объекты</span>
             </div>
           </div>
@@ -260,6 +268,7 @@
         <label class="field-label" for="object-kind">Тип</label>
         <select id="object-kind" required>
           <option value="house">Дом / здание</option>
+          <option value="building">Строение / гараж / хозблок</option>
           <option value="boiler">Котельная / отопление</option>
           <option value="camera">Камера</option>
           <option value="light">Освещение</option>
@@ -270,6 +279,19 @@
         </select>
         <label class="field-label" for="object-zone">Зона / группа</label>
         <input id="object-zone" maxlength="80" placeholder="Например, двор">
+        <div id="building-fields" class="building-fields" hidden>
+          <div class="building-controls-heading">Контур строения на плане</div>
+          <label class="building-switch"><input id="building-shape" type="checkbox"><span>Отображать как строение, а не значок</span></label>
+          <div id="building-dimensions" hidden>
+            <label class="field-label" for="building-width">Ширина: <output id="building-width-value" for="building-width">15%</output></label>
+            <input id="building-width" type="range" min="3" max="65" value="15">
+            <label class="field-label" for="building-height">Длина: <output id="building-height-value" for="building-height">12%</output></label>
+            <input id="building-height" type="range" min="3" max="65" value="12">
+            <label class="field-label" for="building-rotation">Поворот: <output id="building-rotation-value" for="building-rotation">0°</output></label>
+            <input id="building-rotation" type="range" min="0" max="359" value="0">
+            <div class="building-hint">Размеры задаются в процентах ширины и высоты плана, пока масштаб в метрах не указан.</div>
+          </div>
+        </div>
         <div id="camera-fields" class="camera-fields" hidden>
           <div class="camera-controls-heading">Настройка сектора обзора</div>
           <label class="field-label" for="camera-fov">Угол обзора: <output id="camera-fov-value" for="camera-fov">90°</output></label>

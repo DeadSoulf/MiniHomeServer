@@ -47,10 +47,10 @@ PORT = int(os.getenv("MINIHOME_PORT", "8080"))
 SECURE_COOKIE = os.getenv("MINIHOME_COOKIE_SECURE", "0") == "1"
 MAX_BODY = 13 * 1024 * 1024
 SESSION_TTL = 12 * 3600
-KINDS = {"house", "boiler", "camera", "light", "gate", "sensor", "switch", "other"}
+KINDS = {"house", "building", "boiler", "camera", "light", "gate", "sensor", "switch", "other"}
 FAILURES: dict[str, list[float]] = {}
 LOCK = threading.RLock()
-VERSION = "0.3.7"
+VERSION = "0.3.8"
 GITHUB_API = "https://api.github.com/repos/DeadSoulf/MiniHomeServer/commits/main"
 REVISION_FILE = BASE / ".release-commit"
 UPDATE_STATUS = DATA / "update-status.json"
@@ -140,6 +140,10 @@ def init_db():
             ("camera_fov", "INTEGER NOT NULL DEFAULT 90"),
             ("camera_direction", "INTEGER NOT NULL DEFAULT 0"),
             ("camera_reach", "INTEGER NOT NULL DEFAULT 25"),
+            ("building_shape", "INTEGER NOT NULL DEFAULT 0"),
+            ("building_width", "INTEGER NOT NULL DEFAULT 15"),
+            ("building_height", "INTEGER NOT NULL DEFAULT 12"),
+            ("building_rotation", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if name not in columns:
                 db.execute(f"ALTER TABLE devices ADD COLUMN {name} {definition}")
@@ -260,7 +264,8 @@ def snapshot() -> dict:
     with database() as db:
         devices = [dict(row) for row in db.execute(
             "SELECT id,name,kind,zone,x,y,state,updated_at,"
-            "camera_fov,camera_direction,camera_reach "
+            "camera_fov,camera_direction,camera_reach,"
+            "building_shape,building_width,building_height,building_rotation "
             "FROM devices ORDER BY name COLLATE NOCASE"
         )]
         events = [dict(row) for row in db.execute(
@@ -324,7 +329,19 @@ def device_values(data, current=None):
         reach = integer_field(data, "camera_reach", base.get("camera_reach", 25), 5, 65)
     else:
         fov, direction, reach = 90, 0, 25
-    return name, kind, zone, x, y, fov, direction, reach
+    if kind in ("building", "house", "boiler"):
+        shape = data.get("building_shape", base.get("building_shape", 0))
+        if type(shape) is bool:
+            shape = int(shape)
+        elif type(shape) is not int or shape not in (0, 1):
+            raise ValueError("building_shape: ожидается да/нет")
+        width = integer_field(data, "building_width", base.get("building_width", 15), 3, 65)
+        height = integer_field(data, "building_height", base.get("building_height", 12), 3, 65)
+        rotation = integer_field(data, "building_rotation",
+                                 base.get("building_rotation", 0), 0, 359)
+    else:
+        shape, width, height, rotation = 0, 15, 12, 0
+    return name, kind, zone, x, y, fov, direction, reach, shape, width, height, rotation
 
 
 def image_bytes(data_url: str):
@@ -1356,12 +1373,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_bytes(200, {"ok": True})
 
         if method == "POST" and path == "/api/devices":
-            name, kind, zone, x, y, fov, direction, reach = device_values(self.body())
+            name, kind, zone, x, y, fov, direction, reach, shape, width, height, rotation = (
+                device_values(self.body()))
             did = str(uuid.uuid4())
             with database() as db:
                 db.execute("INSERT INTO devices(id,name,kind,zone,x,y,"
-                           "camera_fov,camera_direction,camera_reach) VALUES(?,?,?,?,?,?,?,?,?)",
-                           (did, name, kind, zone, x, y, fov, direction, reach))
+                           "camera_fov,camera_direction,camera_reach,"
+                           "building_shape,building_width,building_height,building_rotation)"
+                           " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (did, name, kind, zone, x, y, fov, direction, reach,
+                            shape, width, height, rotation))
                 add_event(db, "device.added", f"Добавлен объект: {name}")
             return self.send_bytes(201, {"ok": True, "id": did})
 
@@ -1376,11 +1397,15 @@ class Handler(BaseHTTPRequestHandler):
                     db.execute("DELETE FROM devices WHERE id=?", (did,))
                     add_event(db, "device.deleted", f"Удалён объект: {row['name']}")
                 else:
-                    name, kind, zone, x, y, fov, direction, reach = device_values(
+                    (name, kind, zone, x, y, fov, direction, reach,
+                     shape, width, height, rotation) = device_values(
                         self.body(), dict(row))
                     db.execute("UPDATE devices SET name=?,kind=?,zone=?,x=?,y=?,"
-                               "camera_fov=?,camera_direction=?,camera_reach=? WHERE id=?",
-                               (name, kind, zone, x, y, fov, direction, reach, did))
+                               "camera_fov=?,camera_direction=?,camera_reach=?,"
+                               "building_shape=?,building_width=?,building_height=?,"
+                               "building_rotation=? WHERE id=?",
+                               (name, kind, zone, x, y, fov, direction, reach,
+                                shape, width, height, rotation, did))
                     add_event(db, "device.updated", f"Изменён объект: {name}")
             return self.send_bytes(200, {"ok": True})
         self.error(404, "Неизвестная операция")
