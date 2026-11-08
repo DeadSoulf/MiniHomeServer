@@ -84,6 +84,7 @@
               <div class="toolbar">
                 <label class="btn secondary" for="map-file"><span aria-hidden="true">↥</span> Загрузить план</label>
                 <input id="map-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+                <button id="map-scale-btn" class="btn secondary" type="button">⌗ Размеры плана</button>
                 <button id="map-add-building-btn" class="btn secondary" type="button">▱ Добавить строение</button>
                 <button id="map-add-camera-btn" class="btn secondary" type="button">◉ Добавить камеру</button>
                 <button id="edit-map-btn" class="btn secondary" type="button" aria-pressed="false">✎ Редактировать</button>
@@ -111,6 +112,7 @@
               </div>
             </div>
             <div class="map-footer">
+              <span id="map-scale-status" class="map-scale-status">Размеры плана не указаны</span>
               <div class="map-legend"><span class="legend-dot gray"></span> Нет данных <span class="legend-sep"></span><span class="legend-dot cyan"></span> Выбранный объект <span class="legend-sep"></span><span class="legend-camera-sector"></span> Обзор камеры (схема) <span class="legend-sep"></span><span class="legend-building"></span> Контур строения</div>
               <span id="map-mode-label" class="map-tip">Нажмите «Редактировать», чтобы перемещать объекты</span>
             </div>
@@ -214,14 +216,18 @@
               <h2>Сервер</h2>
               <div class="info-line"><span>Название</span><strong>MiniHomeServer</strong></div>
               <div class="info-line"><span>Версия</span><strong id="settings-version">—</strong></div>
-              <div class="integration-coming" id="release-test-marker">Камеры: угол обзора, направление и сектор на плане. Обновления GitHub показывают версию и SHA.</div>
+              <div class="integration-coming" id="release-test-marker">Интерактивный план: перемещение, масштабирование, камеры и строения с размерами в метрах.</div>
               <div class="info-line"><span>Режим</span><strong>Локальный</strong></div>
               <div class="info-line"><span>Хранилище</span><strong>SQLite · сервер</strong></div>
             </article>
             <article class="panel-card">
               <h2>Карта территории</h2>
               <p class="settings-description">Поддерживаются PNG, JPEG и WebP размером до 8 МБ. При повторной загрузке координаты объектов сохраняются.</p>
-              <label class="btn secondary" for="map-file">↥ Заменить план</label>
+              <p class="map-scale-summary" id="map-scale-summary">Размеры плана в метрах пока не заданы.</p>
+              <div class="map-scale-buttons">
+                <label class="btn secondary" for="map-file">↥ Заменить план</label>
+                <button class="btn secondary" id="settings-map-scale-btn" type="button">⌗ Задать размеры в метрах</button>
+              </div>
             </article>
             <article class="panel-card">
               <h2>Интеграции</h2>
@@ -283,13 +289,21 @@
           <div class="building-controls-heading">Контур строения на плане</div>
           <label class="building-switch"><input id="building-shape" type="checkbox"><span>Отображать как строение, а не значок</span></label>
           <div id="building-dimensions" hidden>
-            <label class="field-label" for="building-width">Ширина: <output id="building-width-value" for="building-width">15%</output></label>
-            <input id="building-width" type="range" min="3" max="65" value="15">
-            <label class="field-label" for="building-height">Длина: <output id="building-height-value" for="building-height">12%</output></label>
-            <input id="building-height" type="range" min="3" max="65" value="12">
+            <div id="building-percent-fields">
+              <label class="field-label" for="building-width">Ширина: <output id="building-width-value" for="building-width">15%</output></label>
+              <input id="building-width" type="range" min="3" max="65" value="15">
+              <label class="field-label" for="building-height">Длина: <output id="building-height-value" for="building-height">12%</output></label>
+              <input id="building-height" type="range" min="3" max="65" value="12">
+            </div>
+            <div id="building-meter-fields" hidden>
+              <label class="field-label" for="building-width-m">Ширина строения, м</label>
+              <input id="building-width-m" type="number" min="0.01" step="any" inputmode="decimal" placeholder="Например, 9">
+              <label class="field-label" for="building-height-m">Длина строения, м</label>
+              <input id="building-height-m" type="number" min="0.01" step="any" inputmode="decimal" placeholder="Например, 6">
+            </div>
             <label class="field-label" for="building-rotation">Поворот: <output id="building-rotation-value" for="building-rotation">0°</output></label>
             <input id="building-rotation" type="range" min="0" max="359" value="0">
-            <div class="building-hint">Размеры задаются в процентах ширины и высоты плана, пока масштаб в метрах не указан.</div>
+            <div id="building-size-hint" class="building-hint">Без размеров плана строения задаются в процентах изображения.</div>
           </div>
         </div>
         <div id="camera-fields" class="camera-fields" hidden>
@@ -311,6 +325,31 @@
         <div id="object-error" class="form-error" role="alert"></div>
       </div>
       <div class="dialog-actions"><button type="button" id="dialog-cancel" class="btn secondary">Отмена</button><button type="submit" class="btn primary" id="dialog-save">Сохранить</button></div>
+    </form>
+  </dialog>
+  <dialog id="map-scale-dialog" class="dialog">
+    <form id="map-scale-form">
+      <div class="dialog-head">
+        <div>
+          <div class="eyebrow accent">ТЕРРИТОРИЯ / МАСШТАБ</div>
+          <h2>Размеры плана в метрах</h2>
+        </div>
+        <button class="icon-close" id="map-scale-close" type="button" aria-label="Закрыть">×</button>
+      </div>
+      <div class="form-body">
+        <p class="settings-description">Укажите реальные размеры области, занимающей весь план, без рамок и полей. Они нужны, чтобы задавать размеры строений в метрах.</p>
+        <label class="field-label" for="map-width-m">Ширина плана слева направо, м</label>
+        <input id="map-width-m" type="number" required min="1" max="5000" step="any" inputmode="decimal" placeholder="Например, 30">
+        <label class="field-label" for="map-height-m">Длина плана сверху вниз, м</label>
+        <input id="map-height-m" type="number" required min="1" max="5000" step="any" inputmode="decimal" placeholder="Например, 40">
+        <p class="building-hint">Изменение масштаба не двигает объекты на карте: размеры строений пересчитываются из сохранённых долей изображения.</p>
+        <div id="map-scale-error" class="form-error" role="alert"></div>
+      </div>
+      <div class="dialog-actions">
+        <button id="map-scale-clear" class="btn subtle" type="button">Сбросить</button>
+        <button id="map-scale-cancel" class="btn secondary" type="button">Отмена</button>
+        <button id="map-scale-save" class="btn primary" type="submit">Сохранить размеры</button>
+      </div>
     </form>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

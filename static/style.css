@@ -287,13 +287,17 @@ input::placeholder { color:#60788e; }
 .form-body { padding:0 29px 20px; }
 .camera-fields { margin-top:20px; padding:14px 16px 16px; border:1px solid #30605d; background:rgba(28,83,81,.13); border-radius:10px; }
 .building-fields { margin-top:20px; padding:14px 16px 16px; border:1px solid #58716a; background:rgba(48,106,102,.13); border-radius:10px; }
-.building-fields[hidden],#building-dimensions[hidden] {display:none;}
+.building-fields[hidden],#building-dimensions[hidden],#building-meter-fields[hidden],#building-percent-fields[hidden] {display:none;}
 .building-controls-heading {color:#a4e6ce; font-size:12px; font-weight:700;}
 .building-switch {display:flex; align-items:center; gap:10px; margin-top:15px; font-size:12px; cursor:pointer;}
 .building-switch input {width:18px; height:18px; flex-shrink:0; accent-color:var(--accent);}
 .building-fields input[type="range"] {display:block; width:100%; padding:0; accent-color:var(--accent); cursor:pointer;}
 .building-fields output {color:#9befdd; font-variant-numeric:tabular-nums;}
 .building-hint {font-size:11px; color:#9ab0c1; line-height:1.6; margin-top:12px;}
+.map-scale-status {display:inline-flex; padding:5px 9px; border:1px solid #365b63; color:#b1e5d8; border-radius:7px; font-size:11px; white-space:nowrap;}
+.map-scale-summary {font-size:12px; color:#c6e6da; line-height:1.5; margin:12px 0;}
+.map-scale-buttons {display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+#building-meter-fields input {margin-bottom:7px;}
 .camera-fields[hidden] { display:none; }
 .camera-controls-heading { font-size:12px; font-weight:700; color:#85dfd2; }
 .camera-fields .field-label { margin-top:15px; }
