@@ -20,7 +20,7 @@ jobs:
       - name: JavaScript syntax
         run: node --check static/app.js
       - name: Frontend regression tests
-        run: node --test tests/test_map_upload.js tests/test_camera_map.js
+        run: node --test tests/test_map_upload.js tests/test_camera_map.js tests/test_interactive_map.js
       - name: Systemd installer shell syntax
         run: bash -n scripts/install-systemd.sh scripts/enable-all-interfaces.sh scripts/enable-web-updates.sh scripts/recover-web.sh
       - name: Compose validation
