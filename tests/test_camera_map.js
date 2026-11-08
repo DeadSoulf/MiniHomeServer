@@ -31,6 +31,35 @@ test("wide-angle cone uses major arc; full circle uses SVG circle", () => {
   assert.ok(wide.includes(" A 50 50 0 1 1 "));
   assert.equal(all, "");
 });
+test("SVG camera overlay stays round on a wide rectangular map", () => {
+  const c = context();
+  const layer = {
+    children: [],
+    attrs: {},
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    replaceChildren() { this.children = []; },
+    append(node) { this.children.push(node); },
+  };
+  const stage = {getBoundingClientRect() { return {width: 1000, height: 500}; }};
+  c.document = {
+    getElementById(id) {return id === "map-camera-coverage" ? layer : stage;},
+    createElementNS(_namespace, tag) {
+      return {tag, attrs: {}, classList: {add() {}},
+        setAttribute(key, value) {this.attrs[key] = String(value);}};
+    }
+  };
+  vm.runInContext(`state.devices=[{id:"cam1",kind:"camera",x:0.5,y:0.5,
+    camera_fov:360,camera_direction:45,camera_reach:25}]; renderCameraCoverage();`,c);
+  assert.equal(layer.attrs.viewBox, "0 0 1000 500");
+  assert.equal(layer.children.length, 1);
+  assert.equal(layer.children[0].tag, "circle");
+  assert.equal(layer.children[0].attrs.r, "125");
+  assert.equal(layer.children[0].attrs.cx, "500");
+  vm.runInContext("state.devices[0].camera_fov=90; renderCameraCoverage();",c);
+  assert.equal(layer.children.length, 2);
+  assert.equal(layer.children[0].tag, "path");
+  assert.equal(layer.children[1].tag, "line");
+});
 test("version and 12-character commit form one update label", () => {
   const c = context();
   c.sha = "ab8987d896b72979030ea30cd865282b7243de92";

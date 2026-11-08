@@ -1,5 +1,7 @@
 """Update authorization and integrity tests. No network or privileged commands."""
 import importlib.util
+import base64
+import io
 import json
 from types import SimpleNamespace
 import shutil
@@ -78,6 +80,17 @@ class UpdateAPITests(unittest.TestCase):
         self.assertFalse(server.UPDATE_REQUEST.exists())
         status, _ = self.request("/api/update/status")
         self.assertEqual(status["state"], "failed")
+
+    def test_version_is_read_from_exact_committed_source(self):
+        sha = "a" * 40
+        source = b'VERSION = "0.3.7"\n'
+        document = json.dumps({
+            "encoding": "base64",
+            "content": base64.b64encode(source).decode("ascii"),
+        }).encode()
+        with patch.object(server, "urlopen", return_value=io.BytesIO(document)) as opener:
+            self.assertEqual(server.github_version_for_sha(sha), "0.3.7")
+            self.assertIn("ref=" + sha, opener.call_args.args[0].full_url)
 
     def test_pinned_github_update_requires_session_and_csrf(self):
         sha = "a" * 40
